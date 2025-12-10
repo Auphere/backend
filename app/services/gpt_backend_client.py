@@ -43,7 +43,9 @@ class GPTBackendClient:
             "query": payload.get("message"),  # Agent expects 'query' not 'message'
             "language": payload.get("language", "es"),
             "context": {
-                "chat_mode": payload.get("mode", "explore"),  # Pass mode to agent
+                "metadata": {
+                    "chat_mode": payload.get("mode", "explore"),  # Pass mode to agent
+                }
             }
         }
         
@@ -108,11 +110,13 @@ class GPTBackendClient:
                 "query": payload.get("message"),
                 "language": payload.get("language", "es"),
                 "context": {
-                    "chat_mode": payload.get("mode", "explore"),
+                    "metadata": {
+                        "chat_mode": payload.get("mode", "explore"),
+                    }
                 }
             }
             
-            logger.info(f"Calling agent: user_id={agent_payload['user_id']}")
+            logger.info(f"Calling agent: user_id={agent_payload['user_id']}, mode={agent_payload['context']['metadata']['chat_mode']}")
             
             status_data = {"content": "Analizando tu consulta..."}
             yield f"event: status\ndata: {json.dumps(status_data)}\n\n"
