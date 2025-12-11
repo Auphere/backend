@@ -1,12 +1,13 @@
-# Python
+# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
+
+# C extensions
 *.so
+
+# Distribution / packaging
 .Python
-env/
-venv/
-ENV/
 build/
 develop-eggs/
 dist/
@@ -19,25 +20,151 @@ parts/
 sdist/
 var/
 wheels/
+share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+MANIFEST
 
-# Environment variables
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+.coveragerc
+
+# Translations
+*.mo
+*.pot
+
+# Django stuff (if applicable)
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+
+# Flask stuff (if applicable)
+instance/
+.webassets-cache
+
+# Scrapy stuff (if applicable)
+.scrapy
+
+# Sphinx documentation
+docs/_build/
+
+# PyBuilder
+.pybuilder/
+target/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+.python-version
+
+# pipenv
+Pipfile.lock
+
+# Poetry
+poetry.lock
+
+# pdm
+.pdm.toml
+
+# PEP 582
+__pypackages__/
+
+# Celery stuff
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath parsed files
+*.sage.py
+
+# Environments
 .env
 .env.local
+.env.*.local
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
 
-# IDE
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# pytype static type analyzer
+.pytype/
+
+# Cython debug symbols
+cython_debug/
+
+# IDEs
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
+.project
+.classpath
+.settings/
 
 # OS
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
 Thumbs.db
+Desktop.ini
 
-# Logs
-*.log
+# Project specific
+*.db
+*.sqlite
+*.sqlite3
+auphere_backend.db
 
+# FastAPI
+.pytest_cache/
+
+# Ruff
+.ruff_cache/

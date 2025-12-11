@@ -34,7 +34,10 @@ def normalize_place(raw_place: Dict[str, Any]) -> Dict[str, Any]:
     - location (object with lat, lon, optional)
     - currentStatus (string, optional)
     """
-    if not raw_place or not raw_place.get("name"):
+    if not raw_place:
+        return None
+    if not raw_place.get("name"):
+        print(f"⚠️ Place filtered out - missing name: {raw_place.get('id') or raw_place.get('place_id')}")
         return None
     
     # Extract ID - prioritize DB ID over Google Place ID

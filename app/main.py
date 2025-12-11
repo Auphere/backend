@@ -66,39 +66,11 @@ async def debug_config():
             return f"{key[:4]}...{key[-4:]}"
         return f"{key[:8]}...{key[-8:]}"
     
-    try:
-        client_key = settings.client_api_key
-        admin_key = settings.admin_api_key
-    except ValueError as e:
-        return {
-            "error": str(e),
-            "supabase_url": settings.supabase_url if settings.supabase_url else "NOT_SET",
-            "env_values": {
-                "supabase_publishable_key": mask_key(settings.supabase_publishable_key or ""),
-                "supabase_secret_key": mask_key(settings.supabase_secret_key or ""),
-                "supabase_anon_key": mask_key(settings.supabase_anon_key or ""),
-                "supabase_service_role_key": mask_key(settings.supabase_service_role_key or ""),
-            }
-        }
-    
     return {
         "status": "ok",
-        "supabase_url": settings.supabase_url,
-        "keys_configured": {
-            "client_api_key": mask_key(client_key),
-            "admin_api_key": mask_key(admin_key),
-        },
-        "env_values": {
-            "supabase_publishable_key": mask_key(settings.supabase_publishable_key or ""),
-            "supabase_api_key": mask_key(settings.supabase_api_key or ""),
-            "supabase_secret_key": mask_key(settings.supabase_secret_key or ""),
-            "supabase_anon_key": mask_key(settings.supabase_anon_key or ""),
-            "supabase_service_role_key": mask_key(settings.supabase_service_role_key or ""),
-        },
-        "key_types": {
-            "using_new_keys": bool(settings.supabase_publishable_key and settings.supabase_api_key),
-            "using_legacy_keys": bool(settings.supabase_service_role_key or settings.supabase_anon_key),
-        }
+        "auth0_configured": bool(settings.auth0_domain),
+        "auth0_domain": settings.auth0_domain if settings.auth0_domain else "NOT_SET",
+        "auth0_audience": settings.auth0_audience if settings.auth0_audience else "NOT_SET",
     }
 
 

@@ -87,22 +87,17 @@ class GPTBackendClient:
         """
         Handle chat streaming using Server-Sent Events (SSE).
         
-        Calls the agent via REST and yields SSE-formatted events.
+        Connects to agent's streaming endpoint and forwards events to frontend.
         
         `payload` must include message, session_id, user_id, and optionally mode.
         
         Yields:
-            SSE-formatted strings with events: status, token, end, error
+            SSE-formatted strings with events: status, thought, action, observation, token, end, error
         """
         import asyncio
-        
         import json
         
         try:
-            # Send status to frontend
-            status_data = {"content": "Conectando con el asistente..."}
-            yield f"event: status\ndata: {json.dumps(status_data)}\n\n"
-            
             # Prepare payload for agent
             agent_payload = {
                 "user_id": payload.get("user_id"),
@@ -116,53 +111,66 @@ class GPTBackendClient:
                 }
             }
             
-            logger.info(f"Calling agent: user_id={agent_payload['user_id']}, mode={agent_payload['context']['metadata']['chat_mode']}")
+            logger.info(f"Streaming from agent: user_id={agent_payload['user_id']}, mode={agent_payload['context']['metadata']['chat_mode']}")
             
-            status_data = {"content": "Analizando tu consulta..."}
-            yield f"event: status\ndata: {json.dumps(status_data)}\n\n"
-            
-            # Call agent via REST (with 180s timeout)
-            response = await self.http_client.post("/agent/query", json=agent_payload)
-            response.raise_for_status()
-            agent_response = response.json()
-            
-            response_text = agent_response.get("response_text", "")
-            places = normalize_places(agent_response.get("places", []))
-            
-            # Check if response contains a plan
-            plan = None
-            if agent_response.get("plan"):
-                plan = normalize_plan(agent_response["plan"])
-            
-            # Stream response text word by word for better UX
-            if response_text:
-                words = response_text.split()
-                chunk_size = 3  # words per chunk
-                
-                for i in range(0, len(words), chunk_size):
-                    chunk = " ".join(words[i:i+chunk_size])
-                    if i + chunk_size < len(words):
-                        chunk += " "
+            # Stream from agent's new streaming endpoint
+            async with httpx.AsyncClient(base_url=self.base_url, timeout=180) as client:
+                async with client.stream(
+                    "POST",
+                    "/agent/query/stream",
+                    json=agent_payload,
+                ) as response:
+                    response.raise_for_status()
                     
-                    token_data = {"content": chunk}
-                    yield f"event: token\ndata: {json.dumps(token_data)}\n\n"
+                    # Forward SSE events from agent to frontend
+                    current_event = None
                     
-                    # Small delay for streaming effect
-                    await asyncio.sleep(0.05)
-            
-            # Send end message with complete response, places, and plan
-            end_data = {
-                "content": response_text,
-                "places": places,
-                "plan": plan,
-                "metadata": {
-                    "intention": agent_response.get("intention"),
-                    "confidence": agent_response.get("confidence"),
-                    "model_used": agent_response.get("model_used"),
-                    "processing_time_ms": agent_response.get("processing_time_ms"),
-                }
-            }
-            yield f"event: end\ndata: {json.dumps(end_data)}\n\n"
+                    async for line in response.aiter_lines():
+                        if not line:
+                            yield "\n"
+                            continue
+                        
+                        # Track event type
+                        if line.startswith("event:"):
+                            current_event = line.split(":", 1)[1].strip()
+                            yield f"{line}\n"
+                            continue
+                        
+                        # Process data lines
+                        if line.startswith("data:"):
+                            # Check if this is an 'end' event with places/plan to normalize
+                            if current_event == "end":
+                                try:
+                                    data_json = line[5:].strip()  # Remove "data:" prefix
+                                    data = json.loads(data_json)
+                                    
+                                    # Normalize places
+                                    if data.get("places"):
+                                        logger.info(f"Before normalize: {len(data['places'])} places")
+                                        normalized_places = normalize_places(data["places"])
+                                        logger.info(f"After normalize: {len(normalized_places)} places")
+                                        data["places"] = normalized_places
+                                    
+                                    # Normalize plan
+                                    if data.get("plan"):
+                                        data["plan"] = normalize_plan(data["plan"])
+                                    
+                                    # Re-emit normalized data
+                                    logger.info(f"Sending end event with {len(data.get('places', []))} places")
+                                    yield f"data: {json.dumps(data)}\n"
+                                except Exception as e:
+                                    logger.error(f"Error normalizing end event: {e}")
+                                    yield f"{line}\n"
+                            else:
+                                # Forward other data as-is
+                                yield f"{line}\n"
+                            
+                            # Reset event after processing data
+                            current_event = None
+                            continue
+                        
+                        # Forward other lines as-is
+                        yield f"{line}\n"
             
         except httpx.HTTPStatusError as exc:
             logger.error(f"Agent HTTP error: {exc.response.status_code}")

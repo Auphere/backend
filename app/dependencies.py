@@ -1,76 +1,98 @@
 """Dependencies for FastAPI routes."""
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from supabase import create_client, Client
 from app.config import settings
 from typing import Optional
+import jwt
+from jwt import PyJWKClient
+import logging
 
-# Supabase clients
-supabase_client: Optional[Client] = None
-supabase_admin_client: Optional[Client] = None
-
-
-def get_supabase_client() -> Client:
-    """
-    Get or create Supabase client with publishable key.
-    
-    This client respects Row Level Security (RLS) policies.
-    Use for client-side operations and user-authenticated requests.
-    """
-    global supabase_client
-    if supabase_client is None:
-        supabase_client = create_client(
-            settings.supabase_url,
-            settings.client_api_key
-        )
-    return supabase_client
-
-
-def get_supabase_admin_client() -> Client:
-    """
-    Get Supabase admin client with secret key.
-    
-    This client bypasses Row Level Security (RLS) policies.
-    Use ONLY for server-side operations that require full database access.
-    Never expose this client to the frontend.
-    """
-    global supabase_admin_client
-    if supabase_admin_client is None:
-        supabase_admin_client = create_client(
-            settings.supabase_url,
-            settings.admin_api_key
-        )
-    return supabase_admin_client
-
+logger = logging.getLogger(__name__)
 
 # HTTP Bearer token security
 security = HTTPBearer()
 
 
-def verify_user_token(token: str) -> dict:
-    """Validate a Supabase JWT and return user info."""
+def verify_auth0_token(token: str) -> dict:
+    """
+    Validate an Auth0 JWT token and return user info.
+    
+    Args:
+        token: JWT token from Auth0
+        
+    Returns:
+        dict with user information (id, email, etc.)
+        
+    Raises:
+        HTTPException: If token is invalid
+    """
     try:
-        supabase = get_supabase_client()
-        response = supabase.auth.get_user(token)
-        if response.user is None:
+        # Get Auth0 domain and construct JWKS URL
+        auth0_domain = settings.auth0_domain
+        if not auth0_domain:
+            logger.warning("Auth0 domain not configured, skipping token validation")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid authentication credentials",
+                detail="Auth0 not configured on server",
                 headers={"WWW-Authenticate": "Bearer"},
             )
+        
+        # Construct JWKS URL
+        jwks_url = f"https://{auth0_domain}/.well-known/jwks.json"
+        
+        # Get the signing key
+        jwks_client = PyJWKClient(jwks_url)
+        signing_key = jwks_client.get_signing_key_from_jwt(token)
+        
+        # Decode and validate the token
+        payload = jwt.decode(
+            token,
+            signing_key.key,
+            algorithms=["RS256"],
+            audience=settings.auth0_audience,
+            issuer=f"https://{auth0_domain}/",
+        )
+        
+        # Extract user info from token
+        user_id = payload.get("sub")  # Auth0 user ID
+        email = payload.get("email") or payload.get(f"https://{auth0_domain}/email")
+        name = payload.get("name") or payload.get(f"https://{auth0_domain}/name")
+        
         return {
-            "id": response.user.id,
-            "email": response.user.email,
-            "user_metadata": response.user.user_metadata,
+            "id": user_id,
+            "email": email,
+            "name": name,
+            "user_metadata": payload,
         }
-    except HTTPException:
-        raise
-    except Exception as exc:
+        
+    except jwt.ExpiredSignatureError:
+        logger.warning("Token has expired")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Invalid authentication credentials: {str(exc)}",
+            detail="Token has expired",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    except jwt.InvalidTokenError as e:
+        logger.warning(f"Invalid token: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Invalid authentication credentials: {str(e)}",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    except Exception as exc:
+        logger.error(f"Token validation error: {str(exc)}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Authentication failed: {str(exc)}",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+
+def verify_user_token(token: str) -> dict:
+    """
+    Validate Auth0 JWT token and return user info.
+    """
+    return verify_auth0_token(token)
 
 
 async def get_current_user(

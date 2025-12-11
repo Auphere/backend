@@ -1,13 +1,23 @@
 """Places API router consuming the internal Auphere Places service."""
+import logging
 import math
 from typing import Any, Dict, List, Optional
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
 from app.config import settings
 from app.models.places import PlaceResponse, PlaceSearchRequest, PlaceSearchResponse
 from app.services.google_places import places_service
+
+# ⚠️ TEMPORARY: Enrichment should be in auphere-places, not here
+# TODO: Remove these imports once enrichment is moved to Rust
+from app.enrichment import (
+    enrich_place_with_features,
+    enrich_place_with_amenities,
+    popular_times_service,
+    perplexity_service,
+)
 
 router = APIRouter(prefix="/places", tags=["places"])
 
@@ -63,6 +73,14 @@ async def get_place_details(place_id: str):
     Retrieve a place (with photos & reviews) from the internal service.
     
     `place_id` corresponde al UUID generado en `auphere-places`.
+    
+    ⚠️ ARCHITECTURAL NOTE:
+    This endpoint currently includes enrichment logic that should be in auphere-places.
+    The enrichment calls below are TEMPORARY and will be removed once moved to Rust.
+    
+    Target architecture:
+    - Backend: Pure proxy (no enrichment)
+    - auphere-places: Handles ALL place data including enrichment
     """
     try:
         place_data = await places_service.get_place_details(place_id)
@@ -83,6 +101,26 @@ async def get_place_details(place_id: str):
             status_code=500, detail=f"Failed to get place details: {exc}"
         ) from exc
 
+    # ⚠️ TEMPORARY: Enrichment logic (should be in auphere-places)
+    # TODO: Remove these calls once enrichment is moved to Rust
+    
+    # ✨ ENRICH: Extract and expand amenities
+    place_data = enrich_place_with_amenities(place_data)
+    
+    # ✨ ENRICH: Infer features from existing data
+    place_data = enrich_place_with_features(place_data)
+    
+    # ✨ ENRICH: Get popular times from Google Places
+    google_place_id = place_data.get("google_place_id")
+    popular_times = None
+    if google_place_id:
+        try:
+            popular_times = await popular_times_service.get_popular_times(google_place_id)
+        except Exception as e:
+            # Don't fail the request if popular times fetch fails
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Failed to fetch popular times: {e}")
+    
     place_response = _map_place_record(place_data)
 
     # Attach photos and reviews for consumers that expect them
@@ -92,8 +130,100 @@ async def get_place_details(place_id: str):
         place_response.custom_attributes["photos"] = photos
     if reviews:
         place_response.custom_attributes["reviews"] = reviews
+    
+    # Attach enriched features
+    features = place_data.get("features", [])
+    if features:
+        place_response.custom_attributes["features"] = features
+    
+    # Attach enriched amenities
+    amenities = place_data.get("amenities", [])
+    if amenities:
+        place_response.custom_attributes["amenities"] = amenities
+    
+    # Attach popular times
+    if popular_times:
+        place_response.custom_attributes["popular_times"] = popular_times
 
     return place_response
+
+
+@router.get("/{place_id}/enrich")
+async def enrich_place_from_web(
+    place_id: str,
+    info_types: List[str] = Query(
+        default=["reviews", "social_media"],
+        description="Types of info to enrich: reviews, social_media, events, contact"
+    )
+):
+    """
+    Enrich a place with real-time web data using Perplexity AI.
+    
+    ⚠️ ARCHITECTURAL NOTE:
+    This endpoint should either be:
+    A) In auphere-places (if it's data enrichment)
+    B) In auphere-agent (if it's AI context gathering)
+    
+    Currently in backend as temporary location.
+    
+    This endpoint fetches up-to-date information from the web including:
+    - Recent reviews and sentiment
+    - Social media handles (Instagram, Facebook)
+    - Current events or specials
+    - Contact information
+    
+    Args:
+        place_id: The place UUID
+        info_types: List of information types to fetch
+        
+    Returns:
+        Enriched information from the web
+    """
+    try:
+        # First get the place details
+        place_data = await places_service.get_place_details(place_id)
+        
+        place_name = place_data.get("name")
+        city = place_data.get("city", settings.places_service_default_city)
+        
+        if not place_name:
+            raise HTTPException(status_code=400, detail="Place name not found")
+        
+        # Enrich with web data
+        web_info = await perplexity_service.search_place_info(
+            place_name=place_name,
+            city=city,
+            info_types=info_types
+        )
+        
+        if not web_info:
+            return {
+                "place_id": place_id,
+                "place_name": place_name,
+                "enriched": False,
+                "message": "No additional web information found"
+            }
+        
+        return {
+            "place_id": place_id,
+            "place_name": place_name,
+            "enriched": True,
+            "web_info": web_info,
+            "requested_types": info_types
+        }
+        
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 404:
+            raise HTTPException(status_code=404, detail="Place not found")
+        raise HTTPException(
+            status_code=exc.response.status_code,
+            detail=f"Places service error: {exc.response.text}",
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to enrich place: {exc}"
+        )
 
 
 def _calculate_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:

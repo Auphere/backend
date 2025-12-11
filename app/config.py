@@ -6,17 +6,15 @@ from typing import Optional
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
     
-    # Supabase Configuration
-    supabase_url: str
-    supabase_publishable_key: Optional[str] = None  # new public key
-    supabase_api_key: Optional[str] = None  # new server-side key
-    # Legacy keys (kept for backwards compatibility)
-    supabase_secret_key: Optional[str] = None
-    supabase_anon_key: Optional[str] = None
-    supabase_service_role_key: Optional[str] = None
+    # Auth0 Configuration (authentication)
+    auth0_domain: str
+    auth0_audience: str = "https://auphere-api"  # API identifier in Auth0
     
     # Google Places API (legacy fallback)
     google_places_api_key: Optional[str] = None
+    
+    # Perplexity API
+    perplexity_api_key: Optional[str] = None
     
     # Internal Auphere Places microservice
     places_service_url: str = "http://127.0.0.1:8002"
@@ -51,20 +49,6 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = False
-    
-    @property
-    def client_api_key(self) -> str:
-        """Get the client API key."""
-        return self.supabase_publishable_key or self.supabase_anon_key
-    
-    @property
-    def admin_api_key(self) -> str:
-        """Get the admin API key."""
-        return (
-            self.supabase_api_key
-            or self.supabase_secret_key
-            or self.supabase_service_role_key
-        )
 
 
 # Global settings instance
