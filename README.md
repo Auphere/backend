@@ -1,368 +1,423 @@
-# Auphere Backend API
+# 🔧 Auphere Backend
 
-Backend API para Auphere construido con FastAPI y Supabase.
+**FastAPI Backend Service**
 
-## 🚀 Características
+Servicio backend principal de Auphere que orquesta la comunicación entre el frontend, el agente de IA y el microservicio de lugares.
 
-- ✅ Autenticación completa (Login, Register, Forgot Password, Reset Password)
-- ✅ Integración con Supabase Auth
-- ✅ Gestión de perfiles de usuario
-- ✅ CORS configurado para desarrollo
-- ✅ Validación de datos con Pydantic
-- ✅ Documentación automática con Swagger/OpenAPI
+---
 
-## 📋 Requisitos Previos
+## 📋 **Tabla de Contenidos**
 
-- Python 3.9 o superior
-- Proyecto de Supabase configurado
-- Variables de entorno configuradas
+- [Descripción](#descripción)
+- [Tecnologías](#tecnologías)
+- [Requisitos Previos](#requisitos-previos)
+- [Instalación](#instalación)
+- [Configuración](#configuración)
+- [Ejecución](#ejecución)
+- [API Endpoints](#api-endpoints)
+- [Testing](#testing)
+- [Docker](#docker)
+- [Troubleshooting](#troubleshooting)
 
-## 🔧 Configuración
+---
 
-### 1. Clonar/Crear archivo de entorno
+## 📝 **Descripción**
 
-Duplica el archivo `.env.example` y renómbralo a `.env`:
+El backend de Auphere es una API REST construida con FastAPI que proporciona:
 
-```bash
-cp .env.example .env
+- **Autenticación y autorización** con Auth0
+- **Gestión de usuarios** y preferencias
+- **Orquestación** entre Agent y Places services
+- **Caché** con Redis para optimizar rendimiento
+- **Integración** con servicios externos (Google Places, Perplexity)
+
+---
+
+## 🛠️ **Tecnologías**
+
+- **Framework:** FastAPI 0.115+
+- **Python:** 3.11+
+- **Base de datos:** PostgreSQL (via Supabase o directo)
+- **Caché:** Redis 7+
+- **Autenticación:** Auth0
+- **ASGI Server:** Uvicorn
+
+### **Dependencias Principales**
+
+```
+fastapi==0.115.0
+uvicorn[standard]==0.32.0
+pydantic[email]==2.12.5
+httpx==0.27.2
+redis==5.2.1
+sqlalchemy>=2.0.36
+PyJWT>=2.10.1
 ```
 
-### 2. Configurar variables de entorno
+---
 
-Edita el archivo `.env` con tus credenciales de Supabase:
+## ✅ **Requisitos Previos**
+
+### **Opción 1: Docker**
+- Docker >= 24.0
+- Docker Compose >= 2.20
+
+### **Opción 2: Local**
+- Python 3.11+
+- PostgreSQL 17+ (o acceso a Supabase)
+- Redis 7+
+- pip o poetry
+
+---
+
+## 📦 **Instalación**
+
+### **Opción 1: Con Docker (Recomendado)**
+
+Ver [README principal](../README.md) para instrucciones de Docker Compose.
+
+### **Opción 2: Desarrollo Local**
+
+```bash
+# Navegar al directorio del backend
+cd auphere-backend
+
+# Crear entorno virtual
+python -m venv venv
+source venv/bin/activate  # En Windows: venv\Scripts\activate
+
+# Instalar dependencias
+pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+---
+
+## ⚙️ **Configuración**
+
+### **Variables de Entorno**
+
+Crea un archivo `.env` en `auphere-backend/`:
 
 ```env
-# Supabase Configuration - New API Key System
-SUPABASE_URL=https://tu-proyecto.supabase.co
-SUPABASE_PUBLISHABLE_KEY=sb_publishable_tu_clave_aqui
-SUPABASE_API_KEY=sb_api_key_tu_clave_aqui
+# ============================================
+# Auth0 Configuration
+# ============================================
+AUTH0_DOMAIN=your-tenant.auth0.com
+AUTH0_AUDIENCE=https://auphere-api
 
-# GPT Backend Gateway
-GPT_BACKEND_URL=http://localhost:8001
-GPT_BACKEND_WS_URL=ws://localhost:8001/ws/chat
+# ============================================
+# External API Keys
+# ============================================
+GOOGLE_PLACES_API_KEY=your_google_places_api_key
+PERPLEXITY_API_KEY=your_perplexity_api_key
 
-# Auphere Places microservice
-PLACES_SERVICE_URL=http://127.0.0.1:3001
-# Solo si protegiste los endpoints administrativos
-PLACES_SERVICE_ADMIN_TOKEN=admin-token-dev-change-me-in-production
+# ============================================
+# Internal Services
+# ============================================
+PLACES_SERVICE_URL=http://localhost:8002
+PLACES_SERVICE_ADMIN_TOKEN=dev-admin-token
 PLACES_SERVICE_DEFAULT_CITY=Zaragoza
-PLACES_SERVICE_TIMEOUT=10
+PLACES_SERVICE_TIMEOUT=10.0
 
+GPT_BACKEND_URL=http://localhost:8001
+GPT_BACKEND_WS_URL=ws://localhost:8001
+
+# ============================================
+# Redis Configuration
+# ============================================
+REDIS_HOST=localhost
+REDIS_PORT=6379
+REDIS_DB=0
+REDIS_PASSWORD=
+CACHE_TTL_SECONDS=3600
+
+# ============================================
 # FastAPI Configuration
+# ============================================
 API_HOST=0.0.0.0
 API_PORT=8000
 API_RELOAD=true
 
+# ============================================
 # CORS Configuration
+# ============================================
 FRONTEND_URL=http://localhost:3000
 
+# ============================================
 # Environment
+# ============================================
 ENVIRONMENT=development
 ```
 
-**Obtener credenciales de Supabase (Nuevo Sistema de API Keys):**
+### **Tabla de Variables**
 
-1. Ve a tu proyecto en [Supabase Dashboard](https://app.supabase.com)
-2. Ve a **Settings > API**
-3. Copia las **nuevas claves API** (recomendado):
-   - **Project URL** → `SUPABASE_URL`
-   - **Publishable Key** (`sb_publishable_...`) → `SUPABASE_PUBLISHABLE_KEY` (para frontend y operaciones normales)
-   - **API Key** (`sb_api_key_...`) → `SUPABASE_API_KEY` (⚠️ SOLO backend, mantener secreto)
+| Variable | Descripción | Requerido | Valor por Defecto |
+|----------|-------------|-----------|-------------------|
+| `AUTH0_DOMAIN` | Dominio de Auth0 | ✅ | - |
+| `AUTH0_AUDIENCE` | API Audience | ✅ | `https://auphere-api` |
+| `GOOGLE_PLACES_API_KEY` | API Key de Google Places | ⚠️ | - |
+| `PERPLEXITY_API_KEY` | API Key de Perplexity | ⚠️ | - |
+| `PLACES_SERVICE_URL` | URL del microservicio Places | ✅ | `http://localhost:8002` |
+| `PLACES_SERVICE_ADMIN_TOKEN` | Token de admin | ✅ | - |
+| `GPT_BACKEND_URL` | URL del Agent service | ✅ | `http://localhost:8001` |
+| `REDIS_HOST` | Host de Redis | ✅ | `localhost` |
+| `REDIS_PORT` | Puerto de Redis | ✅ | `6379` |
+| `API_HOST` | Host del servidor | ✅ | `0.0.0.0` |
+| `API_PORT` | Puerto del servidor | ✅ | `8000` |
+| `FRONTEND_URL` | URL del frontend (CORS) | ✅ | `http://localhost:3000` |
+| `ENVIRONMENT` | Entorno de ejecución | ✅ | `development` |
 
-**Nota sobre claves antiguas:**
+---
 
-- Las claves antiguas (`anon` y `service_role`) aún funcionan pero están siendo deprecadas
-- El sistema soporta ambas claves durante la migración
-- Se recomienda migrar al nuevo sistema lo antes posible
-- Ver `MIGRATION_GUIDE.md` para más detalles sobre la migración
+## 🏃 **Ejecución**
 
-### 3. Conectar el servicio `auphere-places`
-
-El backend ahora consume el microservicio `auphere-places` (Rust) como única fuente de datos de lugares. Antes de levantar FastAPI:
-
-1. Sigue el `QUICKSTART.md` del repo `auphere-places` para correr el servicio y ejecutar las migraciones (`./run_migrations.sh`).
-2. Lanza una sincronización manual (`POST /admin/sync/Zaragoza`) para tener datos locales.
-3. Actualiza tus variables `PLACES_SERVICE_*` en `.env`. Puedes cambiar `PLACES_SERVICE_DEFAULT_CITY` cuando sumemos más ciudades.
-
-### 4. Configurar base de datos en Supabase
-
-Ejecuta el siguiente SQL en el SQL Editor de Supabase:
-
-```sql
--- Crear tabla de perfiles
-create table if not exists public.profiles (
-  id uuid references auth.users on delete cascade primary key,
-  name text not null,
-  email text not null,
-  avatar_url text,
-  preferences jsonb default '{}'::jsonb,
-  created_at timestamp with time zone default timezone('utc'::text, now()) not null,
-  updated_at timestamp with time zone default timezone('utc'::text, now()) not null
-);
-
--- Habilitar Row Level Security
-alter table public.profiles enable row level security;
-
--- Políticas de seguridad
--- Los usuarios pueden leer su propio perfil
-create policy "Users can view own profile"
-  on profiles for select
-  using (auth.uid() = id);
-
--- Los usuarios pueden actualizar su propio perfil
-create policy "Users can update own profile"
-  on profiles for update
-  using (auth.uid() = id);
-
--- Permitir inserción desde el trigger (security definer)
-create policy "Enable insert for authenticated users only"
-  on profiles for insert
-  with check (true);
-
--- Función para crear perfil automáticamente
-create or replace function public.handle_new_user()
-returns trigger
-language plpgsql
-security definer set search_path = public
-as $$
-begin
-  insert into public.profiles (id, name, email, avatar_url, preferences)
-  values (
-    new.id,
-    coalesce(new.raw_user_meta_data->>'name', 'User'),
-    new.email,
-    null,
-    '{}'::jsonb
-  );
-  return new;
-end;
-$$;
-
--- Eliminar trigger existente si existe
-drop trigger if exists on_auth_user_created on auth.users;
-
--- Trigger para crear perfil cuando se registra un usuario
-create trigger on_auth_user_created
-  after insert on auth.users
-  for each row execute procedure public.handle_new_user();
-
--- Función para actualizar updated_at automáticamente
-create or replace function public.handle_updated_at()
-returns trigger
-language plpgsql
-as $$
-begin
-  new.updated_at = timezone('utc'::text, now());
-  return new;
-end;
-$$;
-
--- Eliminar trigger existente si existe
-drop trigger if exists on_profile_updated on public.profiles;
-
--- Trigger para actualizar updated_at
-create trigger on_profile_updated
-  before update on public.profiles
-  for each row execute procedure public.handle_updated_at();
-```
-
-### 5. Configurar URLs de redirección en Supabase
-
-1. Ve a Authentication > URL Configuration
-2. Agrega en **Site URL**: `http://localhost:3000`
-3. Agrega en **Redirect URLs**:
-   - `http://localhost:3000/**`
-   - `http://localhost:5173/**`
-   - Tu dominio de producción (cuando esté listo)
-
-### 6. (Opcional) Deshabilitar confirmación de email en desarrollo
-
-Para facilitar las pruebas en desarrollo:
-
-1. Ve a Authentication > Settings
-2. Desactiva **"Enable email confirmations"**
-
-⚠️ **Importante:** Re-activar en producción.
-
-## 🏃 Ejecutar el Servidor
-
-### Opción 1: Con uvicorn directamente
+### **Desarrollo Local**
 
 ```bash
-# Desde la carpeta auphere-backend
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-```
-
-### Opción 2: Con Python directamente
-
-```bash
-# Desde la carpeta auphere-backend
-python -m app.main
-```
-
-### Opción 3: Con el script run.sh (crear si prefieres)
-
-```bash
-#!/bin/bash
-cd "$(dirname "$0")"
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-```
-
-## 📦 Instalación de Dependencias
-
-Si es la primera vez que ejecutas el proyecto:
-
-```bash
-# Crear entorno virtual (recomendado)
-python -m venv venv
-
 # Activar entorno virtual
-# En macOS/Linux:
 source venv/bin/activate
-# En Windows:
-# venv\Scripts\activate
 
-# Instalar dependencias
+# Ejecutar con hot reload
+python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+
+# O usar el entry point
+python app/main.py
+```
+
+### **Con Docker**
+
+```bash
+# Desde la raíz del proyecto
+docker-compose up backend
+
+# O build y run
+docker build -t auphere-backend .
+docker run -p 8000:8000 --env-file .env auphere-backend
+```
+
+### **Verificar que funciona**
+
+```bash
+# Health check
+curl http://localhost:8000/health
+
+# API docs
+open http://localhost:8000/docs
+```
+
+---
+
+## 📚 **API Endpoints**
+
+### **Autenticación**
+
+| Método | Endpoint | Descripción |
+|--------|----------|-------------|
+| POST | `/api/v1/auth/login` | Login de usuario |
+| POST | `/api/v1/auth/register` | Registro de usuario |
+| POST | `/api/v1/auth/logout` | Logout de usuario |
+| GET | `/api/v1/auth/me` | Obtener usuario actual |
+
+### **Places**
+
+| Método | Endpoint | Descripción |
+|--------|----------|-------------|
+| GET | `/api/v1/places/search` | Buscar lugares |
+| GET | `/api/v1/places/{place_id}` | Obtener detalle de lugar |
+| GET | `/api/v1/places/nearby` | Lugares cercanos |
+
+### **Plans**
+
+| Método | Endpoint | Descripción |
+|--------|----------|-------------|
+| POST | `/api/v1/plans/create` | Crear plan de viaje |
+| GET | `/api/v1/plans/{plan_id}` | Obtener plan |
+| GET | `/api/v1/plans/user` | Planes del usuario |
+
+### **Chat**
+
+| Método | Endpoint | Descripción |
+|--------|----------|-------------|
+| POST | `/api/v1/chat/message` | Enviar mensaje al agent |
+| GET | `/api/v1/chat/history` | Historial de conversación |
+| WS | `/api/v1/chat/ws` | WebSocket para chat en tiempo real |
+
+### **Health & Docs**
+
+| Método | Endpoint | Descripción |
+|--------|----------|-------------|
+| GET | `/` | Root endpoint |
+| GET | `/health` | Health check |
+| GET | `/docs` | Swagger UI (solo desarrollo) |
+| GET | `/redoc` | ReDoc UI (solo desarrollo) |
+
+---
+
+## 🧪 **Testing**
+
+```bash
+# Instalar dependencias de testing
+pip install pytest pytest-asyncio httpx
+
+# Ejecutar tests
+pytest
+
+# Con coverage
+pytest --cov=app --cov-report=html
+
+# Ver reporte
+open htmlcov/index.html
+```
+
+### **Estructura de Tests**
+
+```
+auphere-backend/
+├── tests/
+│   ├── test_auth.py
+│   ├── test_places.py
+│   ├── test_plans.py
+│   └── test_chat.py
+```
+
+---
+
+## 🐳 **Docker**
+
+### **Build**
+
+```bash
+docker build -t auphere-backend:latest .
+```
+
+### **Run**
+
+```bash
+docker run -p 8000:8000 \
+  -e AUTH0_DOMAIN=your-tenant.auth0.com \
+  -e AUTH0_AUDIENCE=https://auphere-api \
+  -e PLACES_SERVICE_URL=http://places:8002 \
+  -e GPT_BACKEND_URL=http://agent:8001 \
+  -e REDIS_HOST=redis \
+  auphere-backend:latest
+```
+
+### **Dockerfile**
+
+El Dockerfile usa multi-stage build para optimizar el tamaño:
+
+- **Stage 1 (builder):** Instala dependencias
+- **Stage 2 (runtime):** Copia solo lo necesario
+
+---
+
+## 🔧 **Troubleshooting**
+
+### **Error: Auth0 connection failed**
+
+```bash
+# Verificar credenciales de Auth0
+curl "https://${AUTH0_DOMAIN}/.well-known/openid-configuration"
+
+# Verificar que AUTH0_DOMAIN no incluye https://
+echo $AUTH0_DOMAIN  # Debe ser: your-tenant.auth0.com
+```
+
+### **Error: Cannot connect to Places service**
+
+```bash
+# Verificar que Places está corriendo
+curl http://localhost:8002/health
+
+# Verificar PLACES_SERVICE_URL
+echo $PLACES_SERVICE_URL
+```
+
+### **Error: Redis connection failed**
+
+```bash
+# Verificar que Redis está corriendo
+redis-cli ping
+
+# Si usa Docker
+docker-compose ps redis
+```
+
+### **Error: Module not found**
+
+```bash
+# Reinstalar dependencias
 pip install -r requirements.txt
+
+# Verificar PYTHONPATH
+export PYTHONPATH="${PYTHONPATH}:$(pwd)"
 ```
 
-## 🌐 Endpoints Disponibles
+---
 
-### Autenticación
-
-- `POST /api/v1/auth/register` - Registrar nuevo usuario
-- `POST /api/v1/auth/login` - Iniciar sesión
-- `POST /api/v1/auth/forgot-password` - Solicitar reset de contraseña
-- `POST /api/v1/auth/reset-password` - Resetear contraseña con token
-- `GET /api/v1/auth/me` - Obtener información del usuario actual (requiere autenticación)
-- `POST /api/v1/auth/logout` - Cerrar sesión (requiere autenticación)
-
-### Otros
-
-- `GET /` - Mensaje de bienvenida
-- `GET /health` - Health check
-- `GET /docs` - Documentación interactiva Swagger (solo en desarrollo)
-
-## 📝 Ejemplos de Uso
-
-### Registrar usuario
-
-```bash
-curl -X POST "http://localhost:8000/api/v1/auth/register" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "Juan Pérez",
-    "email": "juan@example.com",
-    "password": "password123"
-  }'
-```
-
-### Login
-
-```bash
-curl -X POST "http://localhost:8000/api/v1/auth/login" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "email": "juan@example.com",
-    "password": "password123"
-  }'
-```
-
-### Obtener información del usuario (requiere token)
-
-```bash
-curl -X GET "http://localhost:8000/api/v1/auth/me" \
-  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
-```
-
-## 🧪 Testing
-
-El servidor incluye documentación interactiva disponible en:
-
-- Swagger UI: `http://localhost:8000/docs`
-- ReDoc: `http://localhost:8000/redoc`
-
-## 🔒 Seguridad
-
-- ✅ Row Level Security (RLS) habilitado en Supabase
-- ✅ Validación de tokens JWT
-- ✅ CORS configurado para desarrollo
-- ✅ Nuevo sistema de API Keys de Supabase
-- ⚠️ **Importante:** Nunca expongas `SUPABASE_API_KEY` en el frontend o repositorios públicos
-
-### Nuevas API Keys de Supabase
-
-El proyecto usa el nuevo sistema de claves API de Supabase:
-
-- **Publishable Key** (`sb_publishable_...`):
-
-  - ✅ Segura para usar en frontend
-  - ✅ Respeta políticas RLS
-  - ✅ Reemplaza a `anon key`
-
-- **API Key** (`sb_api_key_...`):
-  - ❌ NUNCA exponer en frontend
-  - ✅ Solo para operaciones backend administrativas
-  - ✅ Bypassa políticas RLS
-  - ✅ Reemplaza a `secret/service_role key` legacy
-
-Ver `MIGRATION_GUIDE.md` para más información sobre el cambio de sistema de autenticación.
-
-## 📁 Estructura del Proyecto
+## 📁 **Estructura del Proyecto**
 
 ```
 auphere-backend/
 ├── app/
 │   ├── __init__.py
-│   ├── main.py              # Aplicación FastAPI principal
-│   ├── config.py            # Configuración y settings
-│   ├── dependencies.py      # Dependencias (Supabase, auth)
+│   ├── main.py              # Entry point
+│   ├── config.py            # Configuración
+│   ├── dependencies.py      # Dependencias de FastAPI
 │   ├── models/              # Modelos Pydantic
-│   │   ├── __init__.py
-│   │   └── auth.py
-│   └── routers/             # Routers de la API
-│       ├── __init__.py
-│       └── auth.py
-├── .env.example            # Plantilla de variables de entorno
-├── .gitignore
-├── requirements.txt        # Dependencias Python
-└── README.md              # Este archivo
+│   │   ├── auth.py
+│   │   ├── places.py
+│   │   └── plans.py
+│   ├── routers/             # Endpoints
+│   │   ├── auth.py
+│   │   ├── places.py
+│   │   ├── plans.py
+│   │   └── chat.py
+│   ├── services/            # Lógica de negocio
+│   │   ├── google_places.py
+│   │   ├── gpt_backend_client.py
+│   │   └── redis_client.py
+│   └── utils/               # Utilidades
+│       ├── amenities_mapper.py
+│       ├── feature_inference.py
+│       └── normalizers.py
+├── tests/                   # Tests
+├── Dockerfile
+├── requirements.txt
+└── README.md
 ```
 
-## 🐛 Solución de Problemas
+---
 
-### Error: "Missing Supabase environment variables"
-
-- Verifica que el archivo `.env` existe y tiene todas las variables necesarias
-- Asegúrate de que los nombres de las variables sean correctos (sin espacios, etc.)
-
-### Error: "Invalid authentication credentials"
-
-- Verifica que las credenciales de Supabase sean correctas
-- Asegúrate de que el token JWT sea válido y no haya expirado
-
-### Error: "User profile not found"
-
-- Verifica que el trigger `on_auth_user_created` esté funcionando
-- Verifica que la tabla `profiles` tenga la política RLS correcta
-
-### CORS Error
-
-- Verifica que `FRONTEND_URL` en `.env` coincida con la URL del frontend
-- Verifica que las URLs estén en `allow_origins` en `main.py`
-
-## 📚 Recursos
+## 🔗 **Enlaces Útiles**
 
 - [FastAPI Documentation](https://fastapi.tiangolo.com/)
-- [Supabase Python Client](https://github.com/supabase/supabase-py)
-- [Supabase Auth Documentation](https://supabase.com/docs/guides/auth)
+- [Auth0 Python SDK](https://auth0.com/docs/quickstart/backend/python)
+- [Redis Python Client](https://redis-py.readthedocs.io/)
 
-## 👥 Contribuir
+---
 
-1. Crea una rama para tu feature
-2. Realiza tus cambios
-3. Crea un Pull Request
+## 📝 **Notas de Desarrollo**
 
-## 📄 Licencia
+### **Hot Reload**
 
-MIT
+El servidor se reinicia automáticamente al detectar cambios en el código cuando se ejecuta con `--reload`.
+
+### **Logs**
+
+Los logs se imprimen en stdout. En producción, usar un logging centralizado.
+
+### **CORS**
+
+CORS está configurado para permitir requests desde `FRONTEND_URL`. Modificar en `app/main.py` si es necesario.
+
+---
+
+## 🤝 **Contribuir**
+
+1. Fork el proyecto
+2. Crea una rama para tu feature (`git checkout -b feature/AmazingFeature`)
+3. Commit tus cambios (`git commit -m 'Add some AmazingFeature'`)
+4. Push a la rama (`git push origin feature/AmazingFeature`)
+5. Abre un Pull Request
