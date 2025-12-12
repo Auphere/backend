@@ -1,0 +1,178 @@
+name: Deploy Backend to AWS
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  AWS_REGION: eu-central-1
+  ECR_REPOSITORY: auphere-backend
+  SERVICE_NAME: auphere-production-backend
+
+jobs:
+  build-and-push:
+    name: Build and Push to ECR
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tags }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}
+          tags: |
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Image digest
+        run: echo "Image pushed with tags ${{ steps.meta.outputs.tags }}"
+
+  deploy-approval:
+    name: Approve Deployment
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    environment:
+      name: production
+      url: https://auphere-backend-production.eu-central-1.awsapprunner.com
+
+    steps:
+      - name: Manual approval checkpoint
+        run: echo "Deployment approved for ${{ needs.build-and-push.outputs.image_tag }}"
+
+  deploy:
+    name: Deploy to App Runner
+    runs-on: ubuntu-latest
+    needs: [build-and-push, deploy-approval]
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Check if App Runner service exists
+        id: check-service
+        run: |
+          if aws apprunner describe-service --service-arn "arn:aws:apprunner:${{ env.AWS_REGION }}:${{ secrets.AWS_ACCOUNT_ID }}:service/${{ env.SERVICE_NAME }}" 2>/dev/null; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create App Runner service (if not exists)
+        if: steps.check-service.outputs.exists == 'false'
+        run: |
+          aws apprunner create-service \
+            --service-name ${{ env.SERVICE_NAME }} \
+            --source-configuration '{
+              "ImageRepository": {
+                "ImageIdentifier": "${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest",
+                "ImageConfiguration": {
+                  "Port": "8000",
+                  "RuntimeEnvironmentVariables": {
+                    "AUTH0_DOMAIN": "${{ secrets.AUTH0_DOMAIN }}",
+                    "AUTH0_AUDIENCE": "${{ secrets.AUTH0_AUDIENCE }}",
+                    "GOOGLE_PLACES_API_KEY": "${{ secrets.GOOGLE_PLACES_API_KEY }}",
+                    "PERPLEXITY_API_KEY": "${{ secrets.PERPLEXITY_API_KEY }}",
+                    "PLACES_SERVICE_URL": "${{ secrets.PLACES_SERVICE_URL }}",
+                    "PLACES_SERVICE_ADMIN_TOKEN": "${{ secrets.PLACES_ADMIN_TOKEN }}",
+                    "GPT_BACKEND_URL": "${{ secrets.AGENT_SERVICE_URL }}",
+                    "REDIS_HOST": "${{ secrets.REDIS_ENDPOINT }}",
+                    "REDIS_PORT": "6379",
+                    "FRONTEND_URL": "${{ secrets.FRONTEND_URL }}",
+                    "ENVIRONMENT": "production"
+                  }
+                },
+                "ImageRepositoryType": "ECR"
+              },
+              "AuthenticationConfiguration": {
+                "AccessRoleArn": "${{ secrets.APPRUNNER_ROLE_ARN }}"
+              },
+              "AutoDeploymentsEnabled": true
+            }' \
+            --instance-configuration '{
+              "Cpu": "1024",
+              "Memory": "2048"
+            }' \
+            --network-configuration '{
+              "EgressConfiguration": {
+                "EgressType": "VPC",
+                "VpcConnectorArn": "${{ secrets.VPC_CONNECTOR_ARN }}"
+              }
+            }' \
+            --health-check-configuration '{
+              "Protocol": "HTTP",
+              "Path": "/health",
+              "Interval": 10,
+              "Timeout": 5,
+              "HealthyThreshold": 3,
+              "UnhealthyThreshold": 3
+            }' \
+            --tags Key=Project,Value=auphere Key=Environment,Value=production \
+            --region ${{ env.AWS_REGION }}
+
+      - name: Update App Runner service (if exists)
+        if: steps.check-service.outputs.exists == 'true'
+        run: |
+          aws apprunner update-service \
+            --service-arn "arn:aws:apprunner:${{ env.AWS_REGION }}:${{ secrets.AWS_ACCOUNT_ID }}:service/${{ env.SERVICE_NAME }}" \
+            --source-configuration '{
+              "ImageRepository": {
+                "ImageIdentifier": "${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest",
+                "ImageConfiguration": {
+                  "Port": "8000"
+                },
+                "ImageRepositoryType": "ECR"
+              }
+            }' \
+            --region ${{ env.AWS_REGION }}
+
+      - name: Wait for deployment
+        run: |
+          echo "Waiting for App Runner service to be ready..."
+          echo "⏳ Service deployment started. This will take 3-5 minutes."
+          echo "📋 Service URL will be available once deployment completes."
+          echo "✅ Check AWS Console or use: aws apprunner describe-service --service-arn 'arn:aws:apprunner:${{ env.AWS_REGION }}:${{ secrets.AWS_ACCOUNT_ID }}:service/${{ env.SERVICE_NAME }}' --region ${{ env.AWS_REGION }}"
+          # App Runner doesn't have a wait command, so we just inform
+          # The deployment will continue in the background
+
+      - name: Get service URL
+        run: |
+          SERVICE_URL=$(aws apprunner describe-service \
+            --service-arn "arn:aws:apprunner:${{ env.AWS_REGION }}:${{ secrets.AWS_ACCOUNT_ID }}:service/${{ env.SERVICE_NAME }}" \
+            --region ${{ env.AWS_REGION }} \
+            --query 'Service.ServiceUrl' \
+            --output text)
+          echo "🚀 Backend deployed at: https://$SERVICE_URL"
