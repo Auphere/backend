@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     api_reload: bool = True
     
     # CORS Configuration
-    frontend_url: str = "http://localhost:3000"
+    frontend_url: str = "http://localhost:3000, https://app.auphere.com"
     
     # Environment
     environment: str = "development"
