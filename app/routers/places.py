@@ -22,6 +22,87 @@ from app.enrichment import (
 router = APIRouter(prefix="/places", tags=["places"])
 
 
+@router.get("/search", response_model=PlaceSearchResponse)
+async def search_places_get(
+    city: Optional[str] = None,
+    q: Optional[str] = None,
+    lat: Optional[float] = None,
+    lon: Optional[float] = None,
+    radius_km: Optional[float] = None,
+    min_rating: Optional[float] = None,
+    type: Optional[str] = None,
+    page: int = 1,
+    limit: int = 20,
+):
+    """
+    Search places via GET (used by frontend).
+    Proxies to the internal `auphere-places` microservice.
+    """
+    params: Dict[str, Any] = {"page": page, "limit": limit}
+    
+    if city:
+        params["city"] = city
+    elif not q:  # Default city if no query and no city
+        params["city"] = settings.places_service_default_city
+    
+    if q:
+        params["q"] = q
+    if lat is not None:
+        params["lat"] = lat
+    if lon is not None:
+        params["lon"] = lon
+    if radius_km is not None:
+        params["radius_km"] = radius_km
+    if min_rating is not None:
+        params["min_rating"] = min_rating
+    if type:
+        params["type"] = type
+
+    try:
+        raw_response = await places_service.search_places(params)
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(
+            status_code=exc.response.status_code,
+            detail=f"Places service error: {exc.response.text}",
+        )
+    except httpx.RequestError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Failed to reach places service: {exc}",
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Search failed: {exc}") from exc
+
+    # New format: Rust service returns { places: [...], total, page, per_page, total_pages }
+    # Old format: { data: [...], total_count, page, limit, has_more }
+    if "places" in raw_response:
+        # New format from Google Places API
+        raw_places = raw_response.get("places", [])
+        mapped_places = [
+            _map_frontend_place_record(place)
+            for place in raw_places
+        ]
+        total = int(raw_response.get("total", len(mapped_places)))
+        total_pages = int(raw_response.get("total_pages", 1))
+    else:
+        # Old format from database
+        raw_places = raw_response.get("data", [])
+        mapped_places = [
+            _map_place_record(place, lat, lon)
+            for place in raw_places
+        ]
+        total = int(raw_response.get("total_count", len(mapped_places)))
+        total_pages = max(1, math.ceil(total / limit)) if limit else 1
+
+    return PlaceSearchResponse(
+        places=mapped_places,
+        total=total,
+        page=page,
+        per_page=limit,
+        total_pages=total_pages,
+    )
+
+
 @router.post("/search", response_model=PlaceSearchResponse)
 async def search_places(request: PlaceSearchRequest):
     """
@@ -47,16 +128,30 @@ async def search_places(request: PlaceSearchRequest):
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Search failed: {exc}") from exc
 
-    raw_places = raw_response.get("data", [])
-    mapped_places = [
-        _map_place_record(place, request.latitude, request.longitude)
-        for place in raw_places
-    ]
-
-    total = int(raw_response.get("total_count", len(mapped_places)))
-    limit = int(raw_response.get("limit") or request.per_page)
-    page = int(raw_response.get("page") or request.page)
-    total_pages = max(1, math.ceil(total / limit)) if limit else 1
+    # New format: Rust service returns { places: [...], total, page, per_page, total_pages }
+    # Old format: { data: [...], total_count, page, limit, has_more }
+    if "places" in raw_response:
+        # New format from Google Places API
+        raw_places = raw_response.get("places", [])
+        mapped_places = [
+            _map_frontend_place_record(place)
+            for place in raw_places
+        ]
+        total = int(raw_response.get("total", len(mapped_places)))
+        total_pages = int(raw_response.get("total_pages", 1))
+        limit = int(raw_response.get("per_page", request.per_page))
+        page = int(raw_response.get("page", request.page))
+    else:
+        # Old format from database
+        raw_places = raw_response.get("data", [])
+        mapped_places = [
+            _map_place_record(place, request.latitude, request.longitude)
+            for place in raw_places
+        ]
+        total = int(raw_response.get("total_count", len(mapped_places)))
+        limit = int(raw_response.get("limit") or request.per_page)
+        page = int(raw_response.get("page") or request.page)
+        total_pages = max(1, math.ceil(total / limit)) if limit else 1
 
     return PlaceSearchResponse(
         places=mapped_places,
@@ -73,15 +168,9 @@ async def get_place_details(place_id: str):
     Retrieve a place (with photos & reviews) from the internal service.
     
     `place_id` corresponde al UUID generado en `auphere-places`.
-    
-    ⚠️ ARCHITECTURAL NOTE:
-    This endpoint currently includes enrichment logic that should be in auphere-places.
-    The enrichment calls below are TEMPORARY and will be removed once moved to Rust.
-    
-    Target architecture:
-    - Backend: Pure proxy (no enrichment)
-    - auphere-places: Handles ALL place data including enrichment
     """
+    logger = logging.getLogger(__name__)
+    
     try:
         place_data = await places_service.get_place_details(place_id)
     except httpx.HTTPStatusError as exc:
@@ -101,47 +190,52 @@ async def get_place_details(place_id: str):
             status_code=500, detail=f"Failed to get place details: {exc}"
         ) from exc
 
-    # ⚠️ TEMPORARY: Enrichment logic (should be in auphere-places)
-    # TODO: Remove these calls once enrichment is moved to Rust
+    logger.info(f"Place data from Rust service: id={place_data.get('id')}, keys={list(place_data.keys())}")
+
+    # Extract photos/reviews before any processing
+    photos = place_data.get("photos", [])
+    reviews = place_data.get("reviews", [])
     
-    # ✨ ENRICH: Extract and expand amenities
-    place_data = enrich_place_with_amenities(place_data)
+    # Store original ID in case enrichment modifies it
+    original_id = place_data.get("id")
+    original_google_id = place_data.get("google_place_id")
     
-    # ✨ ENRICH: Infer features from existing data
-    place_data = enrich_place_with_features(place_data)
+    # Enrich place data (safely)
+    try:
+        place_data = enrich_place_with_amenities(place_data)
+        place_data = enrich_place_with_features(place_data)
+    except Exception as e:
+        logger.warning(f"Enrichment failed: {e}")
     
-    # ✨ ENRICH: Get popular times from Google Places
+    # Ensure ID is preserved after enrichment
+    if not place_data.get("id") and original_id:
+        place_data["id"] = original_id
+    if not place_data.get("google_place_id") and original_google_id:
+        place_data["google_place_id"] = original_google_id
+    
+    # Get popular times from Google Places
     google_place_id = place_data.get("google_place_id")
     popular_times = None
     if google_place_id:
         try:
             popular_times = await popular_times_service.get_popular_times(google_place_id)
         except Exception as e:
-            # Don't fail the request if popular times fetch fails
-            logger = logging.getLogger(__name__)
             logger.warning(f"Failed to fetch popular times: {e}")
     
+    # Map to response
     place_response = _map_place_record(place_data)
 
-    # Attach photos and reviews for consumers that expect them
-    photos = place_data.get("photos")
-    reviews = place_data.get("reviews")
+    # Attach photos and reviews
     if photos:
         place_response.custom_attributes["photos"] = photos
     if reviews:
         place_response.custom_attributes["reviews"] = reviews
     
-    # Attach enriched features
-    features = place_data.get("features", [])
-    if features:
-        place_response.custom_attributes["features"] = features
-    
-    # Attach enriched amenities
-    amenities = place_data.get("amenities", [])
-    if amenities:
-        place_response.custom_attributes["amenities"] = amenities
-    
-    # Attach popular times
+    # Attach enriched data
+    if place_data.get("features"):
+        place_response.custom_attributes["features"] = place_data["features"]
+    if place_data.get("amenities"):
+        place_response.custom_attributes["amenities"] = place_data["amenities"]
     if popular_times:
         place_response.custom_attributes["popular_times"] = popular_times
 
@@ -276,15 +370,57 @@ def _build_search_params(request: PlaceSearchRequest) -> Dict[str, Any]:
     return params
 
 
+def _map_frontend_place_record(place_data: Dict[str, Any]) -> PlaceResponse:
+    """Map the new frontend-compatible format from Rust service (Google Places API)."""
+    custom_attributes = place_data.get("custom_attributes", {})
+    
+    # Extract photos and reviews from custom_attributes
+    photos = custom_attributes.get("photos", [])
+    reviews = custom_attributes.get("reviews", [])
+    
+    # Build custom_attributes with all required fields
+    custom_attrs = {
+        "city": custom_attributes.get("city"),
+        "district": custom_attributes.get("district"),
+        "primary_photo_url": custom_attributes.get("primary_photo_url"),
+        "primary_photo_thumbnail_url": custom_attributes.get("primary_photo_thumbnail_url"),
+        "google_place_id": custom_attributes.get("google_place_id"),
+        "photos": photos,
+        "reviews": reviews,
+    }
+    
+    # Remove null values
+    custom_attrs = {key: value for key, value in custom_attrs.items() if value is not None}
+    
+    return PlaceResponse(
+        place_id=place_data.get("place_id", "unknown"),
+        name=place_data.get("name", "Unknown Place"),
+        formatted_address=place_data.get("formatted_address"),
+        vicinity=place_data.get("vicinity"),
+        latitude=place_data.get("latitude"),
+        longitude=place_data.get("longitude"),
+        types=place_data.get("types", []),
+        rating=place_data.get("rating"),
+        user_ratings_total=place_data.get("user_ratings_total"),
+        price_level=place_data.get("price_level"),
+        phone_number=place_data.get("phone_number"),
+        website=place_data.get("website"),
+        opening_hours=place_data.get("opening_hours"),
+        is_open=place_data.get("is_open"),
+        custom_attributes=custom_attrs,
+        distance_km=place_data.get("distance_km"),
+    )
+
+
 def _map_place_record(
     place_data: Dict[str, Any],
     user_lat: Optional[float] = None,
     user_lon: Optional[float] = None,
 ) -> PlaceResponse:
     """Normalize the places microservice payload into the public response."""
-    location = place_data.get("location") or []
-    longitude = location[0] if len(location) > 0 else None
-    latitude = location[1] if len(location) > 1 else None
+    # Get coordinates from place_data (Rust service returns them as separate fields)
+    latitude = place_data.get("latitude")
+    longitude = place_data.get("longitude")
 
     distance_km = None
     if (
@@ -322,7 +458,11 @@ def _map_place_record(
 
     place_identifier = place_data.get("id") or place_data.get("google_place_id")
     if not place_identifier:
-        raise ValueError("Place payload missing identifier fields")
+        # Log the actual data for debugging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Place payload missing identifier. Keys: {list(place_data.keys())}, Data sample: {str(place_data)[:500]}")
+        # Use a fallback instead of crashing
+        place_identifier = "unknown"
 
     formatted_address = place_data.get("description") or place_data.get("city")
 
