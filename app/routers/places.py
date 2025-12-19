@@ -214,13 +214,15 @@ async def get_place_details(place_id: str):
         place_data["google_place_id"] = original_google_id
     
     # Get popular times from Google Places
+    # ⚠️ DISABLED: This service generates mock data and wastes API calls
+    # TODO: Re-enable when we have real popular times data source
     google_place_id = place_data.get("google_place_id")
     popular_times = None
-    if google_place_id:
-        try:
-            popular_times = await popular_times_service.get_popular_times(google_place_id)
-        except Exception as e:
-            logger.warning(f"Failed to fetch popular times: {e}")
+    # if google_place_id:
+    #     try:
+    #         popular_times = await popular_times_service.get_popular_times(google_place_id)
+    #     except Exception as e:
+    #         logger.warning(f"Failed to fetch popular times: {e}")
     
     # Map to response
     place_response = _map_place_record(place_data)
