@@ -42,6 +42,9 @@ class Settings(BaseSettings):
     # Environment
     environment: str = "development"
 
+    # Database
+    database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/auphere"
+
     # GPT Backend integration
     gpt_backend_url: str = "http://localhost:8001"
     gpt_backend_ws_url: Optional[str] = None

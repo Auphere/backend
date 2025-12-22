@@ -3,6 +3,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.routers import auth, places, plans, chat, geocoding
+from app.database import engine, Base
 
 # Create FastAPI app
 app = FastAPI(
@@ -34,6 +35,18 @@ app.include_router(places.router, prefix="/api/v1")
 app.include_router(plans.router, prefix="/api/v1")
 app.include_router(chat.router, prefix="/api/v1")
 app.include_router(geocoding.router, prefix="/api/v1")
+
+
+@app.on_event("startup")
+async def on_startup() -> None:
+    """
+    Ensure database schemas exist.
+    
+    In production, prefer running migrations (Alembic) instead of this.
+    This hook is kept to avoid 500s in fresh dev environments.
+    """
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
 
 
 @app.get("/")
