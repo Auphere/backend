@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.routers import auth, places, plans, chat, geocoding
 from app.database import engine, Base
+from app.services.gpt_backend_client import gpt_backend_client
 
 # Create FastAPI app
 app = FastAPI(
@@ -20,8 +21,10 @@ app.add_middleware(
     allow_origins=[
         settings.frontend_url,
         "http://localhost:3000",
+        "http://localhost:3001",  # Next.js frontend
         "http://localhost:5173",
         "http://127.0.0.1:3000",
+        "http://127.0.0.1:3001",
         "http://127.0.0.1:5173",
     ],
     allow_credentials=True,
@@ -47,6 +50,16 @@ async def on_startup() -> None:
     """
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+
+@app.on_event("shutdown")
+async def on_shutdown() -> None:
+    """Cleanup resources on shutdown."""
+    try:
+        await gpt_backend_client.aclose()
+    except Exception:
+        # Best-effort cleanup; avoid crashing shutdown.
+        pass
 
 
 @app.get("/")

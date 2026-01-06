@@ -22,6 +22,10 @@ class GPTBackendClient:
         # Increased timeout to 180 seconds to handle slow agent responses
         self.http_client = httpx.AsyncClient(base_url=self.base_url, timeout=180)
 
+    async def aclose(self) -> None:
+        """Close underlying HTTP client (for app shutdown)."""
+        await self.http_client.aclose()
+
     async def send_message(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """
         Send a message to the agent and get a response.
@@ -113,13 +117,12 @@ class GPTBackendClient:
             
             logger.info(f"Streaming from agent: user_id={agent_payload['user_id']}, mode={agent_payload['context']['metadata']['chat_mode']}")
             
-            # Stream from agent's new streaming endpoint
-            async with httpx.AsyncClient(base_url=self.base_url, timeout=180) as client:
-                async with client.stream(
-                    "POST",
-                    "/agent/query/stream",
-                    json=agent_payload,
-                ) as response:
+            # Stream from agent's streaming endpoint using the shared AsyncClient
+            async with self.http_client.stream(
+                "POST",
+                "/agent/query/stream",
+                json=agent_payload,
+            ) as response:
                     response.raise_for_status()
                     
                     # Forward SSE events from agent to frontend
