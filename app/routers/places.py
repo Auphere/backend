@@ -1,4 +1,9 @@
-"""Places API router consuming the internal Auphere Places service."""
+"""Places API router consuming the internal Auphere Places service.
+
+Backend responsibility (Phase 2+):
+- Act as a gateway/proxy to `auphere-places` (Source of Truth for places).
+- Do not perform place enrichment here (no scraping / no extra sources).
+"""
 import logging
 import math
 from typing import Any, Dict, List, Optional
@@ -9,15 +14,6 @@ from fastapi import APIRouter, HTTPException, Query
 from app.config import settings
 from app.models.places import PlaceResponse, PlaceSearchRequest, PlaceSearchResponse
 from app.services.google_places import places_service
-
-# ⚠️ TEMPORARY: Enrichment should be in auphere-places, not here
-# TODO: Remove these imports once enrichment is moved to Rust
-from app.enrichment import (
-    enrich_place_with_features,
-    enrich_place_with_amenities,
-    popular_times_service,
-    perplexity_service,
-)
 
 router = APIRouter(prefix="/places", tags=["places"])
 
@@ -167,7 +163,9 @@ async def get_place_details(place_id: str):
     """
     Retrieve a place (with photos & reviews) from the internal service.
     
-    `place_id` corresponde al UUID generado en `auphere-places`.
+    `place_id` puede ser:
+    - Google Place ID (recomendado, SoT), o
+    - UUID interno (si el cliente lo tiene).
     """
     logger = logging.getLogger(__name__)
     
@@ -190,39 +188,12 @@ async def get_place_details(place_id: str):
             status_code=500, detail=f"Failed to get place details: {exc}"
         ) from exc
 
-    logger.info(f"Place data from Rust service: id={place_data.get('id')}, keys={list(place_data.keys())}")
+    logger.info(f"Place data from places service: keys={list(place_data.keys())}")
 
     # Extract photos/reviews before any processing
     photos = place_data.get("photos", [])
     reviews = place_data.get("reviews", [])
-    
-    # Store original ID in case enrichment modifies it
-    original_id = place_data.get("id")
-    original_google_id = place_data.get("google_place_id")
-    
-    # Enrich place data (safely)
-    try:
-        place_data = enrich_place_with_amenities(place_data)
-        place_data = enrich_place_with_features(place_data)
-    except Exception as e:
-        logger.warning(f"Enrichment failed: {e}")
-    
-    # Ensure ID is preserved after enrichment
-    if not place_data.get("id") and original_id:
-        place_data["id"] = original_id
-    if not place_data.get("google_place_id") and original_google_id:
-        place_data["google_place_id"] = original_google_id
-    
-    # Get popular times from Google Places
-    # ⚠️ DISABLED: This service generates mock data and wastes API calls
-    # TODO: Re-enable when we have real popular times data source
-    google_place_id = place_data.get("google_place_id")
-    popular_times = None
-    # if google_place_id:
-    #     try:
-    #         popular_times = await popular_times_service.get_popular_times(google_place_id)
-    #     except Exception as e:
-    #         logger.warning(f"Failed to fetch popular times: {e}")
+    tips = place_data.get("tips", [])
     
     # Map to response
     place_response = _map_place_record(place_data)
@@ -232,94 +203,56 @@ async def get_place_details(place_id: str):
         place_response.custom_attributes["photos"] = photos
     if reviews:
         place_response.custom_attributes["reviews"] = reviews
-    
-    # Attach enriched data
-    if place_data.get("features"):
-        place_response.custom_attributes["features"] = place_data["features"]
-    if place_data.get("amenities"):
-        place_response.custom_attributes["amenities"] = place_data["amenities"]
-    if popular_times:
-        place_response.custom_attributes["popular_times"] = popular_times
+    if tips:
+        place_response.custom_attributes["tips"] = tips
 
     return place_response
 
 
-@router.get("/{place_id}/enrich")
-async def enrich_place_from_web(
-    place_id: str,
-    info_types: List[str] = Query(
-        default=["reviews", "social_media"],
-        description="Types of info to enrich: reviews, social_media, events, contact"
-    )
+@router.get("/clusters")
+async def get_place_clusters(
+    city: Optional[str] = None,
+    type: Optional[str] = None,
+    lat: Optional[float] = None,
+    lon: Optional[float] = None,
+    radius_km: Optional[float] = None,
+    eps_m: Optional[float] = None,
+    min_points: Optional[int] = None,
+    limit_places: Optional[int] = None,
+    limit_clusters: Optional[int] = None,
 ):
-    """
-    Enrich a place with real-time web data using Perplexity AI.
-    
-    ⚠️ ARCHITECTURAL NOTE:
-    This endpoint should either be:
-    A) In auphere-places (if it's data enrichment)
-    B) In auphere-agent (if it's AI context gathering)
-    
-    Currently in backend as temporary location.
-    
-    This endpoint fetches up-to-date information from the web including:
-    - Recent reviews and sentiment
-    - Social media handles (Instagram, Facebook)
-    - Current events or specials
-    - Contact information
-    
-    Args:
-        place_id: The place UUID
-        info_types: List of information types to fetch
-        
-    Returns:
-        Enriched information from the web
-    """
+    """Proxy clustering to `auphere-places` (PostGIS DBSCAN)."""
+    params: Dict[str, Any] = {}
+    if city:
+        params["city"] = city
+    if type:
+        params["type"] = type
+    if lat is not None:
+        params["lat"] = lat
+    if lon is not None:
+        params["lon"] = lon
+    if radius_km is not None:
+        params["radius_km"] = radius_km
+    if eps_m is not None:
+        params["eps_m"] = eps_m
+    if min_points is not None:
+        params["min_points"] = min_points
+    if limit_places is not None:
+        params["limit_places"] = limit_places
+    if limit_clusters is not None:
+        params["limit_clusters"] = limit_clusters
+
     try:
-        # First get the place details
-        place_data = await places_service.get_place_details(place_id)
-        
-        place_name = place_data.get("name")
-        city = place_data.get("city", settings.places_service_default_city)
-        
-        if not place_name:
-            raise HTTPException(status_code=400, detail="Place name not found")
-        
-        # Enrich with web data
-        web_info = await perplexity_service.search_place_info(
-            place_name=place_name,
-            city=city,
-            info_types=info_types
-        )
-        
-        if not web_info:
-            return {
-                "place_id": place_id,
-                "place_name": place_name,
-                "enriched": False,
-                "message": "No additional web information found"
-            }
-        
-        return {
-            "place_id": place_id,
-            "place_name": place_name,
-            "enriched": True,
-            "web_info": web_info,
-            "requested_types": info_types
-        }
-        
+        return await places_service.get_place_clusters(params)
     except httpx.HTTPStatusError as exc:
-        if exc.response.status_code == 404:
-            raise HTTPException(status_code=404, detail="Place not found")
         raise HTTPException(
             status_code=exc.response.status_code,
             detail=f"Places service error: {exc.response.text}",
-        )
+        ) from exc
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to reach places service: {exc}") from exc
     except Exception as exc:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to enrich place: {exc}"
-        )
+        raise HTTPException(status_code=500, detail=f"Failed to cluster places: {exc}") from exc
 
 
 def _calculate_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:

@@ -11,14 +11,10 @@ class PlacesServiceClient:
 
     def __init__(self) -> None:
         self.base_url = settings.places_service_url.rstrip("/")
-        self.admin_token = settings.places_service_admin_token
         self.timeout = settings.places_service_timeout
 
     def _headers(self) -> Dict[str, str]:
-        headers = {"Accept": "application/json"}
-        if self.admin_token:
-            headers["X-Admin-Token"] = self.admin_token
-        return headers
+        return {"Accept": "application/json"}
 
     async def search_places(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Proxy search requests to the places service."""
@@ -36,6 +32,17 @@ class PlacesServiceClient:
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.get(
                 f"{self.base_url}/places/{place_id}",
+                headers=self._headers(),
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def get_place_clusters(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Proxy clustering requests to the places service."""
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.get(
+                f"{self.base_url}/places/clusters",
+                params=params,
                 headers=self._headers(),
             )
             response.raise_for_status()

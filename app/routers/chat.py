@@ -5,10 +5,28 @@ from fastapi import APIRouter, HTTPException, Depends, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from app.config import settings
 from app.dependencies import get_current_user, verify_user_token
 from app.services.gpt_backend_client import gpt_backend_client
 
+# Import Langflow client conditionally
+if settings.use_langflow:
+    from app.services.langflow_client import langflow_client
+
 router = APIRouter(prefix="/chat", tags=["chat"])
+
+
+def get_chat_client():
+    """
+    Retorna el cliente de chat activo basado en la configuración.
+    
+    Si USE_LANGFLOW=true, usa Langflow (MVP).
+    Si no, usa auphere-agent (producción).
+    """
+    if settings.use_langflow:
+        from app.services.langflow_client import langflow_client
+        return langflow_client
+    return gpt_backend_client
 
 
 class ChatMessage(BaseModel):
@@ -27,7 +45,9 @@ async def chat_message(
         body["session_id"] = body.get("session_id") or str(uuid.uuid4())
         body["user_id"] = current_user["id"]
         body["mode"] = body.get("mode", "explore")
-        response = await gpt_backend_client.send_message(body)
+        
+        client = get_chat_client()
+        response = await client.send_message(body)
         return response
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
@@ -46,6 +66,9 @@ async def chat_stream(
     - token: Streamed text chunks
     - end: Final response with complete data
     - error: Error message if something fails
+    
+    Note: If USE_LANGFLOW=true, uses Langflow backend.
+          Otherwise, uses auphere-agent.
     """
     try:
         data = payload.dict()
@@ -53,9 +76,12 @@ async def chat_stream(
         data["user_id"] = current_user["id"]
         data.setdefault("mode", "explore")
         
+        # Get appropriate client based on config
+        client = get_chat_client()
+        
         # Return SSE stream
         return StreamingResponse(
-            gpt_backend_client.stream_chat_sse(data),
+            client.stream_chat_sse(data),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
@@ -67,7 +93,7 @@ async def chat_stream(
         raise HTTPException(status_code=500, detail=str(exc))
 
 
-# Chat management endpoints (proxy to agent)
+# Chat management endpoints (proxy to agent or langflow)
 @router.get("/list")
 async def get_user_chats(
     limit: int = 50,
@@ -76,7 +102,8 @@ async def get_user_chats(
 ):
     """Get all chats for the current user."""
     try:
-        response = await gpt_backend_client.get_user_chats(
+        client = get_chat_client()
+        response = await client.get_user_chats(
             user_id=current_user["id"],
             limit=limit,
             offset=offset
@@ -93,7 +120,8 @@ async def get_chat(
 ):
     """Get a specific chat by ID."""
     try:
-        response = await gpt_backend_client.get_chat(chat_id)
+        client = get_chat_client()
+        response = await client.get_chat(chat_id)
         return response
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
@@ -107,7 +135,8 @@ async def create_chat(
     """Create a new chat."""
     try:
         payload["user_id"] = current_user["id"]
-        response = await gpt_backend_client.create_chat(payload)
+        client = get_chat_client()
+        response = await client.create_chat(payload)
         return response
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
@@ -121,7 +150,8 @@ async def update_chat(
 ):
     """Update a chat (e.g., rename title)."""
     try:
-        response = await gpt_backend_client.update_chat(chat_id, payload)
+        client = get_chat_client()
+        response = await client.update_chat(chat_id, payload)
         return response
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
@@ -134,7 +164,8 @@ async def delete_chat(
 ):
     """Delete a chat."""
     try:
-        await gpt_backend_client.delete_chat(chat_id, current_user["id"])
+        client = get_chat_client()
+        await client.delete_chat(chat_id, current_user["id"])
         return {"status": "deleted"}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
@@ -148,7 +179,8 @@ async def get_chat_history(
 ):
     """Get full chat history (messages) for a chat."""
     try:
-        response = await gpt_backend_client.get_chat_history(chat_id, limit=limit)
+        client = get_chat_client()
+        response = await client.get_chat_history(chat_id, limit=limit)
         return response
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))

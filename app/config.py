@@ -13,12 +13,8 @@ class Settings(BaseSettings):
     # Google Places API (legacy fallback)
     google_places_api_key: Optional[str] = None
     
-    # Perplexity API
-    perplexity_api_key: Optional[str] = None
-    
     # Internal Auphere Places microservice
     places_service_url: str = "http://127.0.0.1:8002"
-    places_service_admin_token: Optional[str] = None
     places_service_default_city: str = "Zaragoza"
     places_service_timeout: float = 10.0
     
@@ -45,9 +41,18 @@ class Settings(BaseSettings):
     # Database
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/auphere"
 
-    # GPT Backend integration
+    # GPT Backend integration (auphere-agent)
     gpt_backend_url: str = "http://localhost:8001"
     gpt_backend_ws_url: Optional[str] = None
+    
+    # Langflow integration (MVP alternative to auphere-agent)
+    langflow_url: str = "http://localhost:7860"
+    langflow_api_key: Optional[str] = None
+    langflow_recommend_flow_id: Optional[str] = None
+    langflow_chitchat_flow_id: Optional[str] = None
+    
+    # Feature flag: use Langflow instead of auphere-agent
+    use_langflow: bool = False
     
     class Config:
         env_file = ".env"
