@@ -2,18 +2,29 @@
 
 Gateway API (FastAPI) para Auphere.
 
-- Expone endpoints estables para el frontend bajo ` /api/v1/* `
+- Expone endpoints estables para el frontend bajo `/api/v1/*`
 - Hace proxy/orquestación hacia:
   - `auphere-agent` (IA + streaming SSE)
   - `auphere-places` (SoT de lugares: search/detail/clusters)
+- Gestión de planes (CRUD)
+- Autenticación con Auth0
 
-> Este servicio **no** realiza enrichment de lugares. Todo lo “places” vive en `auphere-places`.
+> Este servicio **no** realiza enrichment de lugares. Todo lo "places" vive en `auphere-places`.
+
+## Tecnologías
+
+- **Framework:** FastAPI 0.115+
+- **Base de datos:** PostgreSQL (SQLAlchemy async)
+- **Caché:** Redis
+- **Auth:** Auth0 (JWT)
+- **Analytics:** PostHog (Cloud en producción)
+- **Python:** 3.9+
 
 ## Requisitos
 
-- Python 3.11+
+- Python 3.9+
 - Redis 7+
-- PostgreSQL (según tu configuración)
+- PostgreSQL
 - Servicios internos:
   - `auphere-agent` en `http://localhost:8001`
   - `auphere-places` en `http://localhost:8002`
@@ -33,18 +44,18 @@ pip install -r requirements.txt
 Crea `.env` en `auphere-backend/`:
 
 ```env
-# Auth0 (si usas auth)
+# Environment
+ENVIRONMENT=development
+
+# Auth0
 AUTH0_DOMAIN=your-tenant.auth0.com
 AUTH0_AUDIENCE=https://auphere-api
 
-# Google Places (solo para /geocoding/* proxy; opcional si no usas ese endpoint)
-GOOGLE_PLACES_API_KEY=your_google_places_api_key
+# Database
+DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/auphere
 
 # Internal services
 PLACES_SERVICE_URL=http://localhost:8002
-PLACES_SERVICE_DEFAULT_CITY=Zaragoza
-PLACES_SERVICE_TIMEOUT=10.0
-
 GPT_BACKEND_URL=http://localhost:8001
 
 # Redis
@@ -57,13 +68,25 @@ CACHE_TTL_SECONDS=3600
 # FastAPI
 API_HOST=0.0.0.0
 API_PORT=8000
-API_RELOAD=true
 
 # CORS
 FRONTEND_URL=http://localhost:3000
 
-ENVIRONMENT=development
+# PostHog (opcional en local - usa console.log)
+POSTHOG_ENABLED=false
+# POSTHOG_API_KEY=phc_xxx  # Solo producción
+# POSTHOG_HOST=https://app.posthog.com
 ```
+
+### Variables de PostHog (Analytics)
+
+| Variable | Descripción | Requerido | Valor por Defecto |
+|----------|-------------|-----------|-------------------|
+| `POSTHOG_ENABLED` | Habilitar PostHog | ⚠️ | `false` |
+| `POSTHOG_API_KEY` | Project API Key (solo producción) | ⚠️ | - |
+| `POSTHOG_HOST` | Host de PostHog | ⚠️ | `https://app.posthog.com` |
+
+> **Nota:** En desarrollo (`ENVIRONMENT=development`), PostHog usa console logging. En producción, envía a PostHog Cloud.
 
 ## Ejecutar
 
@@ -74,11 +97,30 @@ python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 ## Verificación rápida
 
-- `GET /health`
-- `GET /docs`
+```bash
+# Health check
+curl http://localhost:8000/health
 
-## Contrato de endpoints
+# API docs
+open http://localhost:8000/docs
+```
 
-Ver `SERVICES.md`.
+## Endpoints principales
 
+| Método | Endpoint | Descripción |
+|--------|----------|-------------|
+| GET | `/health` | Health check |
+| GET | `/docs` | Swagger UI |
+| POST | `/api/v1/chat/stream` | Chat con streaming SSE |
+| GET | `/api/v1/plans` | Listar planes del usuario |
+| POST | `/api/v1/plans` | Crear plan |
+| GET | `/api/v1/plans/{id}` | Obtener plan |
+| PATCH | `/api/v1/plans/{id}` | Actualizar plan |
+| DELETE | `/api/v1/plans/{id}` | Eliminar plan |
 
+## Docker
+
+```bash
+docker build -t auphere-backend:latest .
+docker run -p 8000:8000 --env-file .env auphere-backend:latest
+```

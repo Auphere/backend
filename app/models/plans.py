@@ -154,6 +154,12 @@ class PlanUpdateRequest(BaseModel):
     state: Optional[Literal["draft", "saved", "completed"]] = None
     metadata: Optional[Dict[str, Any]] = None
 
+    # Phase 6: AI-assisted edits (replan partial) via auphere-agent
+    ai_edit: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Optional AI edit request; when present, backend will call auphere-agent to compute an updated plan before persisting.",
+    )
+
 
 class PlanResponse(PlanBase):
     """Plan response returned to clients."""

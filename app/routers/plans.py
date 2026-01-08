@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.dependencies import get_current_user
 from app.models.plans import PlanCreateRequest, PlanResponse, PlanUpdateRequest
 from app.database import Base, get_db
+from app.services.gpt_backend_client import gpt_backend_client
 
 router = APIRouter(prefix="/plans", tags=["plans"])
 
@@ -121,6 +122,34 @@ async def create_plan(
     db.add(plan)
     await db.commit()
     await db.refresh(plan)
+
+    # Best-effort: index plan in Qdrant via agent (non-blocking for UX)
+    try:
+        await gpt_backend_client.upsert_plan_vector(
+            {
+                "user_id": current_user["id"],
+                "plan_id": plan.id,
+                "plan": {
+                    "id": plan.id,
+                    "user_id": plan.user_id,
+                    "name": plan.name,
+                    "description": plan.description,
+                    "category": plan.category,
+                    "state": plan.state,
+                    "vibes": plan.vibes or [],
+                    "tags": plan.tags or [],
+                    "execution": plan.execution or {},
+                    "stops": plan.stops or [],
+                    "summary": plan.summary or {},
+                    "final_recommendations": plan.final_recommendations or [],
+                    "metadata": plan.extra_data or {},
+                    "updated_at": plan.updated_at.isoformat() if plan.updated_at else None,
+                },
+            }
+        )
+    except Exception:
+        # Best-effort indexing
+        pass
     
     return PlanResponse(
         id=plan.id,
@@ -272,6 +301,128 @@ async def patch_plan(
 
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found")
+
+    # Phase 6: AI-assisted edit path (PATCH, but computed by agent with full context)
+    if payload.ai_edit is not None:
+        agent_payload = {
+            "user_id": current_user["id"],
+            "plan_id": plan.id,
+            "plan": {
+                "id": plan.id,
+                "user_id": plan.user_id,
+                "name": plan.name,
+                "description": plan.description,
+                "category": plan.category,
+                "state": plan.state,
+                "vibes": plan.vibes or [],
+                "tags": plan.tags or [],
+                "execution": plan.execution or {},
+                "stops": plan.stops or [],
+                "summary": plan.summary or {},
+                "final_recommendations": plan.final_recommendations or [],
+                "metadata": plan.extra_data or {},
+            },
+            "edit": payload.ai_edit,
+        }
+
+        try:
+            agent_result = await gpt_backend_client.edit_plan(agent_payload)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Failed to reach agent for plan edit: {exc}") from exc
+
+        if not agent_result.get("success"):
+            raise HTTPException(status_code=400, detail=agent_result.get("error") or "Plan edit failed")
+
+        updated_plan = agent_result.get("updated_plan") or {}
+        # Persist updated fields (keep same plan.id)
+        if updated_plan.get("name"):
+            plan.name = updated_plan["name"]
+        plan.description = updated_plan.get("description", plan.description)
+        plan.category = updated_plan.get("category", plan.category)
+        if isinstance(updated_plan.get("vibes"), list):
+            plan.vibes = updated_plan["vibes"]
+        if isinstance(updated_plan.get("tags"), list):
+            plan.tags = updated_plan["tags"]
+        if isinstance(updated_plan.get("execution"), dict):
+            plan.execution = updated_plan["execution"]
+        if isinstance(updated_plan.get("stops"), list):
+            plan.stops = updated_plan["stops"]
+        if isinstance(updated_plan.get("summary"), dict):
+            plan.summary = updated_plan["summary"]
+        if isinstance(updated_plan.get("final_recommendations"), list):
+            plan.final_recommendations = updated_plan["final_recommendations"]
+
+        # store edit metadata for audit/debug
+        extra = plan.extra_data or {}
+        edits = extra.get("ai_edits") or []
+        if not isinstance(edits, list):
+            edits = []
+        edits.append(
+            {
+                "at": datetime.utcnow().isoformat(),
+                "edit": payload.ai_edit,
+                "agent_summary": agent_result.get("summary"),
+            }
+        )
+        extra["ai_edits"] = edits[-20:]  # cap
+        plan.extra_data = extra
+
+        plan.updated_at = datetime.utcnow()
+        await db.commit()
+        await db.refresh(plan)
+
+        # Best-effort: re-index updated plan in Qdrant via agent
+        try:
+            await gpt_backend_client.upsert_plan_vector(
+                {
+                    "user_id": current_user["id"],
+                    "plan_id": plan.id,
+                    "plan": {
+                        "id": plan.id,
+                        "user_id": plan.user_id,
+                        "name": plan.name,
+                        "description": plan.description,
+                        "category": plan.category,
+                        "state": plan.state,
+                        "vibes": plan.vibes or [],
+                        "tags": plan.tags or [],
+                        "execution": plan.execution or {},
+                        "stops": plan.stops or [],
+                        "summary": plan.summary or {},
+                        "final_recommendations": plan.final_recommendations or [],
+                        "metadata": plan.extra_data or {},
+                        "updated_at": plan.updated_at.isoformat() if plan.updated_at else None,
+                    },
+                }
+            )
+        except Exception:
+            pass
+
+        return PlanResponse(
+            id=plan.id,
+            user_id=plan.user_id,
+            name=plan.name,
+            description=plan.description,
+            category=plan.category,
+            state=plan.state,
+            vibes=plan.vibes or [],
+            tags=plan.tags or [],
+            execution=plan.execution or {},
+            stops=plan.stops,
+            summary=plan.summary or {},
+            final_recommendations=plan.final_recommendations or [],
+            metadata=plan.extra_data or {},
+            created_at=plan.created_at.isoformat(),
+            updated_at=plan.updated_at.isoformat(),
+            executed=bool(plan.executed),
+            execution_date=plan.execution_date,
+            rating_post_execution=plan.rating_post_execution,
+            feedback=plan.feedback,
+            # Legacy fields
+            vibe=plan.vibe,
+            total_duration=plan.total_duration,
+            total_distance=plan.total_distance,
+        )
     
     # Only update fields that are provided
     if payload.name is not None:
@@ -304,6 +455,33 @@ async def patch_plan(
     
     await db.commit()
     await db.refresh(plan)
+
+    # Best-effort: re-index plan in Qdrant after manual patch updates
+    try:
+        await gpt_backend_client.upsert_plan_vector(
+            {
+                "user_id": current_user["id"],
+                "plan_id": plan.id,
+                "plan": {
+                    "id": plan.id,
+                    "user_id": plan.user_id,
+                    "name": plan.name,
+                    "description": plan.description,
+                    "category": plan.category,
+                    "state": plan.state,
+                    "vibes": plan.vibes or [],
+                    "tags": plan.tags or [],
+                    "execution": plan.execution or {},
+                    "stops": plan.stops or [],
+                    "summary": plan.summary or {},
+                    "final_recommendations": plan.final_recommendations or [],
+                    "metadata": plan.extra_data or {},
+                    "updated_at": plan.updated_at.isoformat() if plan.updated_at else None,
+                },
+            }
+        )
+    except Exception:
+        pass
     
     return PlanResponse(
         id=plan.id,

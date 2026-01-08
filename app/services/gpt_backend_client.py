@@ -184,6 +184,35 @@ class GPTBackendClient:
             error_data = {"content": "No pudimos conectar con el asistente. Intenta de nuevo."}
             yield f"event: error\ndata: {json.dumps(error_data)}\n\n"
 
+    async def edit_plan(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Phase 6: Ask the agent to compute an edited/replanned plan based on a ground-truth plan.
+
+        Expects:
+        - user_id
+        - plan_id
+        - plan (current plan payload)
+        - edit (operation/instruction/stop_number/constraints)
+        """
+        try:
+            response = await self.http_client.post("/agent/plan/edit", json=payload)
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as exc:
+            logger.error(
+                f"Agent plan-edit HTTP error: {exc.response.status_code} - {exc.response.text}"
+            )
+            raise
+        except Exception as exc:
+            logger.error(f"Agent plan-edit communication error: {exc}")
+            raise
+
+    async def upsert_plan_vector(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Index/update a plan in the agent's vector DB (Qdrant). Best-effort."""
+        response = await self.http_client.post("/agent/vectors/plans/upsert", json=payload)
+        response.raise_for_status()
+        return response.json()
+
 
     async def get_user_chats(self, user_id: str, limit: int = 50, offset: int = 0) -> Dict[str, Any]:
         """Get all chats for a user from the agent."""

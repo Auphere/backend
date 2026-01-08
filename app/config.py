@@ -54,9 +54,20 @@ class Settings(BaseSettings):
     # Feature flag: use Langflow instead of auphere-agent
     use_langflow: bool = False
     
+    # Analytics (PostHog) - optional
+    # Local: console logging | Production: PostHog Cloud
+    posthog_enabled: bool = False
+    posthog_api_key: Optional[str] = None  # Required for production
+    posthog_host: str = "https://app.posthog.com"  # PostHog Cloud
+    
     class Config:
         env_file = ".env"
         case_sensitive = False
+
+
+def get_settings() -> Settings:
+    """Get settings instance (for dependency injection)."""
+    return settings
 
 
 # Global settings instance
