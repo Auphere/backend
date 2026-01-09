@@ -7,6 +7,12 @@ from app.database import engine, Base
 from app.services.gpt_backend_client import gpt_backend_client
 from app.utils.analytics import shutdown_analytics
 
+# Optional: API request tracking middleware (fail-open inside analytics module).
+try:
+    from app.utils.analytics import AnalyticsMiddleware
+except Exception:
+    AnalyticsMiddleware = None  # type: ignore
+
 # Create FastAPI app
 app = FastAPI(
     title="Auphere API",
@@ -32,6 +38,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Analytics middleware (server-side PostHog events like api_request)
+if AnalyticsMiddleware is not None and settings.environment.lower() == "production" and settings.posthog_enabled:
+    app.add_middleware(AnalyticsMiddleware)
 
 # Include routers
 app.include_router(auth.router, prefix="/api/v1")

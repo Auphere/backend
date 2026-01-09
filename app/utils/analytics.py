@@ -70,14 +70,22 @@ def _init_analytics() -> None:
         return
     
     host = settings.posthog_host
-    
-    _posthog_client = Posthog(
-        api_key=api_key,
-        host=host,
-        debug=False,
-    )
-    
-    logger.info(f"[Analytics] PostHog initialized: {host}")
+
+    # PostHog Python SDK constructor signature varies across versions.
+    # Analytics must NEVER crash app startup in production.
+    try:
+        try:
+            _posthog_client = Posthog(api_key=api_key, host=host, debug=False)
+        except TypeError:
+            try:
+                _posthog_client = Posthog(project_api_key=api_key, host=host, debug=False)
+            except TypeError:
+                _posthog_client = Posthog(api_key, host=host, debug=False)
+
+        logger.info(f"[Analytics] PostHog initialized: {host}")
+    except Exception as exc:
+        _posthog_client = None
+        logger.warning(f"[Analytics] PostHog init failed (fail-open): {exc}")
 
 
 def get_posthog_client() -> Optional["Posthog"]:
@@ -126,11 +134,13 @@ def identify_user(
     client = get_posthog_client()
     if not client:
         return
-    
-    client.identify(
-        distinct_id=user_id,
-        properties=props,
-    )
+    try:
+        client.identify(
+            distinct_id=user_id,
+            properties=props,
+        )
+    except Exception as exc:
+        logger.error(f"[Analytics] identify failed: {exc}")
 
 
 def track_event(
@@ -191,11 +201,13 @@ def set_user_properties(
     client = get_posthog_client()
     if not client:
         return
-    
-    client.identify(
-        distinct_id=user_id,
-        properties=properties,
-    )
+    try:
+        client.identify(
+            distinct_id=user_id,
+            properties=properties,
+        )
+    except Exception as exc:
+        logger.error(f"[Analytics] set_user_properties failed: {exc}")
 
 
 # =============================================================================
@@ -502,4 +514,8 @@ analytics = Analytics()
 
 
 # Initialize on module load
-_init_analytics()
+try:
+    _init_analytics()
+except Exception as exc:
+    # Absolute fail-open: never prevent backend boot due to analytics.
+    logger.warning(f"[Analytics] init failed on import (fail-open): {exc}")
