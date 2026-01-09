@@ -97,7 +97,7 @@ def is_analytics_enabled() -> bool:
 
 def _log_event_local(event_name: str, user_id: Optional[str], properties: Dict[str, Any]) -> None:
     """Log event to console in development mode."""
-    logger.debug(f"[Analytics Event] {event_name} | user={user_id or 'anonymous'} | props={properties}")
+    logger.info(f"📊 [Analytics Event] {event_name} | user={user_id or 'anonymous'} | props={properties}")
 
 
 # =============================================================================

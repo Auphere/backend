@@ -5,6 +5,7 @@ from app.config import settings
 from app.routers import auth, places, plans, chat, geocoding
 from app.database import engine, Base
 from app.services.gpt_backend_client import gpt_backend_client
+from app.utils.analytics import shutdown_analytics
 
 # Create FastAPI app
 app = FastAPI(
@@ -60,6 +61,9 @@ async def on_shutdown() -> None:
     except Exception:
         # Best-effort cleanup; avoid crashing shutdown.
         pass
+    
+    # Flush PostHog events before shutdown
+    shutdown_analytics()
 
 
 @app.get("/")

@@ -75,7 +75,7 @@ FRONTEND_URL=http://localhost:3000
 # PostHog (opcional en local - usa console.log)
 POSTHOG_ENABLED=false
 # POSTHOG_API_KEY=phc_xxx  # Solo producción
-# POSTHOG_HOST=https://app.posthog.com
+# POSTHOG_HOST=https://eu.i.posthog.com
 ```
 
 ### Variables de PostHog (Analytics)
@@ -84,7 +84,7 @@ POSTHOG_ENABLED=false
 |----------|-------------|-----------|-------------------|
 | `POSTHOG_ENABLED` | Habilitar PostHog | ⚠️ | `false` |
 | `POSTHOG_API_KEY` | Project API Key (solo producción) | ⚠️ | - |
-| `POSTHOG_HOST` | Host de PostHog | ⚠️ | `https://app.posthog.com` |
+| `POSTHOG_HOST` | Host de PostHog | ⚠️ | `https://eu.i.posthog.com` |
 
 > **Nota:** En desarrollo (`ENVIRONMENT=development`), PostHog usa console logging. En producción, envía a PostHog Cloud.
 

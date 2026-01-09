@@ -58,7 +58,7 @@ class Settings(BaseSettings):
     # Local: console logging | Production: PostHog Cloud
     posthog_enabled: bool = False
     posthog_api_key: Optional[str] = None  # Required for production
-    posthog_host: str = "https://app.posthog.com"  # PostHog Cloud
+    posthog_host: str = "https://eu.i.posthog.com"  # PostHog Cloud EU
     
     class Config:
         env_file = ".env"
