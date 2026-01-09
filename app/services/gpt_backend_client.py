@@ -90,17 +90,20 @@ class GPTBackendClient:
     async def stream_chat_sse(self, payload: Dict[str, Any]):
         """
         Handle chat streaming using Server-Sent Events (SSE).
-        
+
         Connects to agent's streaming endpoint and forwards events to frontend.
-        
+        STOP BUTTON: Detects when frontend closes connection and cancels agent request.
+
         `payload` must include message, session_id, user_id, and optionally mode.
-        
+
         Yields:
             SSE-formatted strings with events: status, thought, action, observation, token, end, error
         """
         import asyncio
         import json
-        
+
+        agent_stream = None  # Track stream for cleanup
+
         try:
             # Prepare payload for agent
             agent_payload = {
@@ -114,67 +117,88 @@ class GPTBackendClient:
                     }
                 }
             }
-            
+
             logger.info(f"Streaming from agent: user_id={agent_payload['user_id']}, mode={agent_payload['context']['metadata']['chat_mode']}")
-            
+
             # Stream from agent's streaming endpoint using the shared AsyncClient
             async with self.http_client.stream(
                 "POST",
                 "/agent/query/stream",
                 json=agent_payload,
             ) as response:
+                    agent_stream = response
                     response.raise_for_status()
-                    
+
                     # Forward SSE events from agent to frontend
                     current_event = None
-                    
-                    async for line in response.aiter_lines():
-                        if not line:
-                            yield "\n"
-                            continue
-                        
-                        # Track event type
-                        if line.startswith("event:"):
-                            current_event = line.split(":", 1)[1].strip()
-                            yield f"{line}\n"
-                            continue
-                        
-                        # Process data lines
-                        if line.startswith("data:"):
-                            # Check if this is an 'end' event with places/plan to normalize
-                            if current_event == "end":
-                                try:
-                                    data_json = line[5:].strip()  # Remove "data:" prefix
-                                    data = json.loads(data_json)
-                                    
-                                    # Normalize places
-                                    if data.get("places"):
-                                        logger.info(f"Before normalize: {len(data['places'])} places")
-                                        normalized_places = normalize_places(data["places"])
-                                        logger.info(f"After normalize: {len(normalized_places)} places")
-                                        data["places"] = normalized_places
-                                    
-                                    # Normalize plan
-                                    if data.get("plan"):
-                                        data["plan"] = normalize_plan(data["plan"])
-                                    
-                                    # Re-emit normalized data
-                                    logger.info(f"Sending end event with {len(data.get('places', []))} places")
-                                    yield f"data: {json.dumps(data)}\n"
-                                except Exception as e:
-                                    logger.error(f"Error normalizing end event: {e}")
+
+                    try:
+                        async for line in response.aiter_lines():
+                            # Try to yield line - this will raise exception if client disconnected
+                            try:
+                                if not line:
+                                    yield "\n"
+                                    continue
+
+                                # Track event type
+                                if line.startswith("event:"):
+                                    current_event = line.split(":", 1)[1].strip()
                                     yield f"{line}\n"
-                            else:
-                                # Forward other data as-is
+                                    continue
+
+                                # Process data lines
+                                if line.startswith("data:"):
+                                    # Check if this is an 'end' event with places/plan to normalize
+                                    if current_event == "end":
+                                        try:
+                                            data_json = line[5:].strip()  # Remove "data:" prefix
+                                            data = json.loads(data_json)
+
+                                            # Normalize places
+                                            if data.get("places"):
+                                                logger.info(f"Before normalize: {len(data['places'])} places")
+                                                normalized_places = normalize_places(data["places"])
+                                                logger.info(f"After normalize: {len(normalized_places)} places")
+                                                data["places"] = normalized_places
+
+                                            # Normalize plan
+                                            if data.get("plan"):
+                                                data["plan"] = normalize_plan(data["plan"])
+
+                                            # Re-emit normalized data
+                                            logger.info(f"Sending end event with {len(data.get('places', []))} places")
+                                            yield f"data: {json.dumps(data)}\n"
+                                        except Exception as e:
+                                            logger.error(f"Error normalizing end event: {e}")
+                                            yield f"{line}\n"
+                                    else:
+                                        # Forward other data as-is
+                                        yield f"{line}\n"
+
+                                    # Reset event after processing data
+                                    current_event = None
+                                    continue
+
+                                # Forward other lines as-is
                                 yield f"{line}\n"
-                            
-                            # Reset event after processing data
-                            current_event = None
-                            continue
-                        
-                        # Forward other lines as-is
-                        yield f"{line}\n"
-            
+
+                            except (GeneratorExit, StopAsyncIteration, ConnectionError, BrokenPipeError) as e:
+                                # Frontend disconnected (stop button clicked)
+                                logger.info(
+                                    f"Frontend disconnected (stop button): {type(e).__name__}, session_id={agent_payload.get('session_id')}"
+                                )
+                                # Close the agent stream
+                                if agent_stream:
+                                    try:
+                                        await agent_stream.aclose()
+                                    except Exception:
+                                        pass
+                                raise  # Stop the generator
+
+                    except (GeneratorExit, StopAsyncIteration, ConnectionError, BrokenPipeError):
+                        # Client disconnected - already logged above
+                        return
+
         except httpx.HTTPStatusError as exc:
             logger.error(f"Agent HTTP error: {exc.response.status_code}")
             error_data = {"content": f"Error del asistente: {exc.response.status_code}"}

@@ -1,4 +1,5 @@
 import json
+import logging
 import uuid
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Depends, Request
@@ -8,6 +9,8 @@ from pydantic import BaseModel
 from app.config import settings
 from app.dependencies import get_current_user, verify_user_token
 from app.services.gpt_backend_client import gpt_backend_client
+
+logger = logging.getLogger(__name__)
 
 # Import Langflow client conditionally
 if settings.use_langflow:
@@ -56,17 +59,19 @@ async def chat_message(
 @router.post("/stream")
 async def chat_stream(
     payload: ChatMessage,
+    request: Request,  # NEW: Add request for disconnection detection
     current_user: dict = Depends(get_current_user),
 ):
     """
     Stream chat responses using Server-Sent Events (SSE).
-    
+    STOP BUTTON: Detects when client disconnects and cancels agent request.
+
     Returns a streaming response with events:
     - status: Status updates during processing
     - token: Streamed text chunks
     - end: Final response with complete data
     - error: Error message if something fails
-    
+
     Note: If USE_LANGFLOW=true, uses Langflow backend.
           Otherwise, uses auphere-agent.
     """
@@ -75,13 +80,30 @@ async def chat_stream(
         data["session_id"] = data.get("session_id") or str(uuid.uuid4())
         data["user_id"] = current_user["id"]
         data.setdefault("mode", "explore")
-        
+
         # Get appropriate client based on config
         client = get_chat_client()
-        
+
+        # Wrap generator to detect disconnection
+        async def disconnect_aware_stream():
+            try:
+                async for chunk in client.stream_chat_sse(data):
+                    # Check if client disconnected
+                    if await request.is_disconnected():
+                        logger.info(
+                            f"Client disconnected at router level, session_id={data['session_id']}"
+                        )
+                        return
+                    yield chunk
+            except (GeneratorExit, StopAsyncIteration, ConnectionError):
+                logger.info(
+                    f"Stream interrupted at router level, session_id={data['session_id']}"
+                )
+                return
+
         # Return SSE stream
         return StreamingResponse(
-            client.stream_chat_sse(data),
+            disconnect_aware_stream(),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
